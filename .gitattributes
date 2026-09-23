@@ -1,0 +1,20 @@
+# Normalise line endings to LF inside the repository, regardless of the
+# contributor's platform or their global core.autocrlf setting.
+* text=auto eol=lf
+
+# Shell scripts and Git hooks MUST keep LF endings. With CRLF endings the
+# shebang line breaks and the hooks silently fail to execute on Linux/macOS
+# and in CI, which would disable the attribution checks.
+*.sh text eol=lf
+.githooks/* text eol=lf
+
+# Binary assets — never line-ending converted, never diffed as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

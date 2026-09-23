@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Keeps a focused field clear of the floating form action bar. */
+  @media (min-width: 640px) {
+    html:has([data-sticky-actions]) {
+      scroll-padding-bottom: 7rem;
+    }
+  }
+
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    /* Inter's alternate forms for 1, 4, 6 and 9 read better in tracking
+       numbers and timestamps. */
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* A visible focus ring everywhere, because the staff area is keyboard-driven.
+     Form controls replace this with their own border-and-glow treatment. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-600 ring-offset-2 ring-offset-white;
+  }
+
+  /* Respect a reduced-motion preference rather than animating regardless. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .skip-link {
+    @apply absolute left-4 top-4 z-50 -translate-y-20 rounded-lg bg-brand-700 px-4 py-2
+           text-sm font-medium text-white shadow-raised transition-transform focus:translate-y-0;
+  }
+
+  /* Small label above a value. Used sparingly: type size and weight carry
+     most of the hierarchy, so these are reserved for data labels. */
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.06em] text-ink-subtle;
+  }
+}

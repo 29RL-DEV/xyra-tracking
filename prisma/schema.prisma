@@ -1,0 +1,189 @@
+// Shipment Tracking Dashboard — data model.
+//
+// Boundary note: Shipment and TrackingEvent have public projections.
+// InternalNote, StaffUser and the staff-only fields of Shipment and Enquiry
+// have none. That boundary is enforced in src/lib/dto, never in the browser.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ShipmentStatus {
+  CREATED
+  COLLECTED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  DELAYED
+  EXCEPTION
+}
+
+enum ServiceLevel {
+  STANDARD
+  EXPRESS
+  ECONOMY
+}
+
+enum ShipmentType {
+  PARCEL
+  PALLET
+  DOCUMENT
+}
+
+enum EnquiryCategory {
+  DELIVERY_DELAY
+  WRONG_ADDRESS
+  DAMAGED_OR_MISSING
+  COLLECTION_ISSUE
+  OTHER
+}
+
+enum EnquiryStatus {
+  OPEN
+  RESOLVED
+}
+
+enum ShipmentAuditAction {
+  CREATED
+  UPDATED
+  EVENT_APPLIED
+}
+
+/// A member of operations staff. One role is enough for this application.
+model StaffUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  notes             InternalNote[]
+  events            TrackingEvent[]
+  resolvedEnquiries Enquiry[]
+  auditEntries      ShipmentAuditEntry[]
+
+  @@map("staff_users")
+}
+
+/// The core record. Carries everything the customer sees and everything staff manage.
+model Shipment {
+  id             String         @id @default(cuid())
+  trackingNumber String         @unique
+  status         ShipmentStatus @default(CREATED)
+
+  originCity         String
+  originCountry      String
+  destinationCity    String
+  destinationCountry String
+
+  estimatedDelivery DateTime  @db.Date
+  /// Captured once, the first time estimatedDelivery changes, so the customer
+  /// can see that the promise moved rather than only its latest value.
+  originalEstimatedDelivery DateTime? @db.Date
+
+  currentLocation String?
+
+  serviceLevel      ServiceLevel  @default(STANDARD)
+  shipmentType      ShipmentType?
+  packageCount      Int           @default(1)
+  weightKg          Decimal?      @db.Decimal(8, 2)
+  customerReference String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events       TrackingEvent[]
+  notes        InternalNote[]
+  enquiries    Enquiry[]
+  auditEntries ShipmentAuditEntry[]
+
+  @@index([status])
+  @@index([updatedAt])
+  @@map("shipments")
+}
+
+/// One thing that happened to a shipment. Append-only: there is no update or
+/// delete path anywhere in the application.
+model TrackingEvent {
+  id         String         @id @default(cuid())
+  shipmentId String
+  occurredAt DateTime
+  location   String
+  type       ShipmentStatus
+  message    String
+  /// Ordering tie-break, so events sharing occurredAt sort deterministically.
+  createdAt  DateTime       @default(now())
+
+  createdById String?
+
+  shipment  Shipment   @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  createdBy StaffUser? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([shipmentId, occurredAt])
+  @@map("tracking_events")
+}
+
+/// Staff-only commentary. Never serialised into a public response.
+model InternalNote {
+  id         String   @id @default(cuid())
+  shipmentId String
+  authorId   String
+  body       String
+  createdAt  DateTime @default(now())
+
+  shipment Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: removing a staff account must never silently take
+  /// the notes they wrote with it.
+  author   StaffUser @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId, createdAt])
+  @@map("internal_notes")
+}
+
+/// A customer question raised against a tracking number.
+model Enquiry {
+  id         String          @id @default(cuid())
+  shipmentId String
+  /// Normalised copy of the tracking number the enquiry was raised against.
+  /// It matches the related shipment only because tracking numbers are
+  /// immutable after creation.
+  trackingNumber String
+  category   EnquiryCategory
+  message    String
+  status     EnquiryStatus   @default(OPEN)
+  createdAt  DateTime        @default(now())
+  resolvedAt DateTime?
+  resolvedById String?
+
+  shipment   Shipment   @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  resolvedBy StaffUser? @relation(fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([shipmentId])
+  @@map("enquiries")
+}
+
+/// Who changed a shipment's own fields, when, and from what to what.
+/// Append-only and staff-only, like tracking events: there is no update or
+/// delete path, and no public projection.
+model ShipmentAuditEntry {
+  id          String              @id @default(cuid())
+  shipmentId  String
+  action      ShipmentAuditAction
+  /// Field name → { from, to } for each field the action changed. Null for
+  /// CREATED, where the shipment itself records what was set.
+  changes     Json?
+  staffUserId String?
+  createdAt   DateTime            @default(now())
+
+  shipment  Shipment   @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  staffUser StaffUser? @relation(fields: [staffUserId], references: [id], onDelete: SetNull)
+
+  @@index([shipmentId, createdAt])
+  @@map("shipment_audit_entries")
+}

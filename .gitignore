@@ -1,0 +1,45 @@
+# Secrets — never commit real environment values. Track .env.example only.
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+.next/
+out/
+build/
+dist/
+
+# Test and coverage artefacts
+coverage/
+test-results/
+playwright-report/
+blob-report/
+.nyc_output/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local tooling caches
+.vercel
+*.tsbuildinfo
+
+
+# Local embedded PostgreSQL data directories (see scripts/local-db.ts)
+.postgres/
+.postgres-test/
