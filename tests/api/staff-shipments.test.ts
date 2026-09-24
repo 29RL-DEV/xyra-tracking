@@ -130,29 +130,33 @@ describe("staff shipments API", () => {
       expect(response.status).toBe(201);
 
       const body = await readJson<{ shipment: StaffShipment }>(response);
-      expect(body.shipment.trackingNumber).toMatch(/^TRK-[A-Z0-9]{6}$/);
+      // No fixture uses the TRK-DEMO- sequence, so the first number is issued.
+      expect(body.shipment.trackingNumber).toBe("TRK-DEMO-001");
       expect(await prisma.shipment.count()).toBe(6);
     });
 
-    it("accepts a supplied tracking number and upper-cases it", async () => {
+    it("accepts a supplied tracking number, upper-cases and pads it", async () => {
       const response = await create(
         send("/api/staff/shipments", "POST", {
           ...VALID_SHIPMENT,
-          trackingNumber: "trk-manual-01",
+          trackingNumber: "trk-demo-7",
         }),
       );
 
       const body = await readJson<{ shipment: StaffShipment }>(response);
-      expect(body.shipment.trackingNumber).toBe("TRK-MANUAL-01");
+      expect(body.shipment.trackingNumber).toBe("TRK-DEMO-007");
     });
 
     it("rejects a duplicate tracking number with 409 and creates nothing", async () => {
+      await create(
+        send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, trackingNumber: "TRK-DEMO-050" }),
+      );
       const before = await prisma.shipment.count();
 
       const response = await create(
         send("/api/staff/shipments", "POST", {
           ...VALID_SHIPMENT,
-          trackingNumber: "TRK-TEST-001",
+          trackingNumber: "TRK-DEMO-050",
         }),
       );
 
@@ -355,6 +359,13 @@ describe("staff shipments API", () => {
     });
 
     it("refuses to mark a shipment delivered when it has no delivered event", async () => {
+      // Out for delivery may move on to Delivered, so it is the delivered guard
+      // that answers here, not the journey rule.
+      await prisma.shipment.update({
+        where: { id: fixtures.inTransitId },
+        data: { status: "OUT_FOR_DELIVERY" },
+      });
+
       const response = await update(
         send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
           status: "DELIVERED",

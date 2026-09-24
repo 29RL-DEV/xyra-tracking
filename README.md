@@ -8,7 +8,7 @@ I built it for a take-home task. All the data is made up.
 
 ## Try it
 
-Staff login: `staff@demo.test` / `DemoStaff2026!` at `/staff/login`. It's a fictional demo account, published on purpose so reviewers can get in. The real secrets are only in environment variables.
+Staff login at `/staff/login`, with either of two demo accounts (same password): `staff@demo.test` or `staff2@demo.test`, password `DemoStaff2026!`. The second one is there so you can see the change history attribute edits to different people. The login page has a "Use this" button that fills in the form. These are fictional accounts, published on purpose so reviewers can get in. The real secrets are only in environment variables.
 
 Demo tracking numbers, one per state:
 
@@ -20,7 +20,7 @@ Demo tracking numbers, one per state:
 | `TRK-DEMO-004` | Exception (address problem) |
 | `TRK-DEMO-005` | Just collected |
 
-The seed also adds about twenty more shipments so search, filters and pagination have something to work with.
+The seed also adds about twenty more shipments (TRK-DEMO-006 onwards) so search, filters and pagination have something to work with.
 
 ## What it does
 
@@ -33,7 +33,7 @@ The seed also adds about twenty more shipments so search, filters and pagination
 **Staff (login)**
 - Overview page with counts and the shipments that need attention.
 - Shipment list with search, status filter and pagination.
-- Create and edit shipments, or generate a tracking number.
+- Create and edit shipments. The tracking number is always TRK-DEMO- plus digits: staff type only the digits, or leave it blank to get the next free number.
 - Add tracking events. History is append-only, nothing is edited or deleted.
 - Internal notes the customer never sees.
 - A change history on each shipment showing who changed what.
@@ -57,15 +57,16 @@ prisma/            schema, migrations, seed
 tests/ and e2e/    Vitest and Playwright
 ```
 
-The part I care most about is keeping public and staff data apart. There are two separate mappers, so internal notes and staff-only fields can't end up in a public response. Every staff endpoint also checks the session on the server, not just in the UI.
+One thing I paid particular attention to is keeping public and staff data separate. There are two separate mappers, so internal notes and staff-only fields can't end up in a public response. Every staff endpoint also checks the session on the server, not just in the UI.
 
 ## Business rules
 
-- The newest event decides the shipment's status and location. An event dated earlier is only added to the history, so back-filling a gap can't move the shipment backwards.
-- A shipment can't be marked delivered without a delivered event, and a delivered event must be the latest one.
-- Events dated in the future are rejected.
-- The original ETA is saved the first time the date changes and never overwritten.
-- Tracking numbers can't be changed after creation.
+- Status changes only through tracking events. The newest event sets the shipment's status and location; there is no separate status control.
+- Shipments move through the defined lifecycle: Created → Collected → In transit → Out for delivery → Delivered. Events can also record Delayed or Exception states without skipping the normal lifecycle.
+- Earlier-dated events can be added to history but cannot move the shipment backwards. Invalid transitions are rejected by the server with 422.
+- Delivered is final, and a shipment cannot be marked Delivered without a matching latest Delivered event.
+- Customer messages are optional for normal events and required for Delayed and Exception events. Future-dated events are rejected.
+- The original ETA is preserved when it changes, and tracking numbers cannot be changed after creation.
 
 ## Security
 
@@ -122,7 +123,9 @@ Migrations and seeding are run separately from your machine, not on deploy. The 
 
 - The rate limiter is in memory. On a serverless host each instance keeps its own counters, so it stops casual abuse but isn't a real global limit.
 - Sessions can't be revoked before they expire. Signing out only clears the cookie.
-- There's a single seeded staff account, with no registration or password change.
+- Staff accounts are only created by the seed (two, with the same single role). There's no registration or password change.
+- Staff can't reply to an enquiry from the app. It collects no contact details, as the brief asks, so there is nowhere to send an answer. Staff mark an enquiry resolved or reopen it, and leave an internal note on the shipment.
 - Only enquiries can be deleted. Shipments, events and notes can't.
+- Tracking numbers follow on from each other, so someone could guess a neighbouring one. Lookups are rate limited and the public page shows no personal data, but a real carrier would use random numbers.
 
-With more time I'd add a shared rate limiter, server-side session revocation and an automated accessibility check.
+With more time I'd add a shared rate limiter, server-side session revocation, an automated accessibility check, and a way for staff to answer an enquiry, for example a reply shown on the tracking page next to the customer's reference.

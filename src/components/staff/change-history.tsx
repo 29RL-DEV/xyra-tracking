@@ -9,6 +9,7 @@ import { formatDate } from "@/lib/format/date";
 import { Card } from "@/components/ui/card";
 import { DateTime } from "@/components/ui/date-time";
 import { Section } from "@/components/ui/section";
+import { StaffBadge } from "@/components/ui/staff-badge";
 
 const FIELD_LABEL: Record<string, string> = {
   status: "Status",
@@ -75,8 +76,13 @@ export function ChangeHistory({ changes }: { changes: StaffShipmentChange[] }) {
             {changes.map((change) => (
               <li key={change.id} className="px-5 py-4">
                 <p className="text-sm font-semibold text-ink">{describe(change)}</p>
-                <p className="mt-0.5 text-xs text-ink-subtle">
-                  {change.staff ? change.staff.name : "A removed staff account"} ·{" "}
+                <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-subtle">
+                  {change.staff ? (
+                    <StaffBadge name={change.staff.name} />
+                  ) : (
+                    <span>A removed staff account</span>
+                  )}
+                  <span aria-hidden="true">·</span>
                   <DateTime value={change.createdAt} />
                 </p>
                 {Object.keys(change.changes).length > 0 ? (

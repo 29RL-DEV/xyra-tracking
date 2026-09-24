@@ -1,20 +1,25 @@
 /**
  * Tracking numbers.
  *
- * The accepted format is deliberately permissive: a customer retyping a number
- * from a label should not be rejected for case or for a carrier prefix we did
- * not anticipate. The server re-applies this rule on every entry point.
+ * Lookup is deliberately permissive: a customer retyping a number from a label
+ * should not be rejected for case or for a carrier prefix we did not
+ * anticipate. The server re-applies this rule on every entry point.
+ *
+ * New shipments are stricter: every number this application issues is
+ * TRK-DEMO- followed by digits, padded to at least three (TRK-DEMO-007).
  */
 
 export const TRACKING_NUMBER_PATTERN = /^[A-Z0-9-]{6,40}$/;
 
-/**
- * Alphabet for generated numbers. 0/O, 1/I and L/U are excluded because
- * tracking numbers get read aloud and retyped, and those collisions are a real
- * support cost.
- */
-const GENERATED_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789";
-const GENERATED_LENGTH = 6;
+export const TRACKING_NUMBER_PREFIX = "TRK-DEMO-";
+
+/** What a new shipment's number may be: the prefix and one to six digits. */
+export const NEW_TRACKING_NUMBER_PATTERN = /^TRK-DEMO-(\d{1,6})$/;
+
+/** The digits an operator types after the prefix. */
+export const TRACKING_DIGITS_PATTERN = /^\d{1,6}$/;
+
+const MIN_DIGITS = 3;
 
 /** Upper-cases and trims. Lookup is case-insensitive everywhere. */
 export function normaliseTrackingNumber(value: string): string {
@@ -25,39 +30,22 @@ export function isValidTrackingNumber(value: string): boolean {
   return TRACKING_NUMBER_PATTERN.test(normaliseTrackingNumber(value));
 }
 
-/**
- * A uniformly distributed integer in [0, max) from a cryptographically secure
- * source, so the next generated number cannot be predicted from earlier ones.
- *
- * Web Crypto rather than `node:crypto`: this module is also bundled for the
- * browser, where the search form imports its pattern, and `getRandomValues` is
- * available in both. Rejection sampling keeps every character equally likely.
- */
-function secureRandomInt(max: number): number {
-  const range = 0x1_0000_0000;
-  const limit = range - (range % max);
-  const buffer = new Uint32Array(1);
-
-  for (;;) {
-    globalThis.crypto.getRandomValues(buffer);
-    const value = buffer[0]!;
-    if (value < limit) return value % max;
-  }
+/** "7" and "007" name the same shipment, so both become TRK-DEMO-007. */
+export function trackingNumberFromDigits(digits: string): string {
+  return `${TRACKING_NUMBER_PREFIX}${String(Number(digits)).padStart(MIN_DIGITS, "0")}`;
 }
 
 /**
- * Generates a candidate of the form TRK-XXXXXX. Uniqueness is checked by the
- * caller. The format is fixed by the specification; resistance to guessing
- * comes from the unpredictable source above and the rate limit on lookups.
+ * The number after the highest one already issued, so numbers follow on from
+ * each other. Numbers in any other format are ignored.
  */
-export function generateTrackingNumber(
-  randomInt: (max: number) => number = secureRandomInt,
-): string {
-  let suffix = "";
+export function nextTrackingNumber(existing: readonly string[]): string {
+  let highest = 0;
 
-  for (let i = 0; i < GENERATED_LENGTH; i += 1) {
-    suffix += GENERATED_ALPHABET.charAt(randomInt(GENERATED_ALPHABET.length));
+  for (const trackingNumber of existing) {
+    const digits = NEW_TRACKING_NUMBER_PATTERN.exec(trackingNumber)?.[1];
+    if (digits) highest = Math.max(highest, Number(digits));
   }
 
-  return `TRK-${suffix}`;
+  return trackingNumberFromDigits(String(highest + 1));
 }

@@ -220,7 +220,7 @@ function Metric({
  * The shared status-badge tone system groups Collected, In transit and Out
  * for delivery under one "progress" colour, which reads fine as a badge next
  * to a status word but made three of the seven bar segments indistinguishable
- * from each other here. Created, Delivered, Delayed and Needs attention keep
+ * from each other here. Created, Delivered, Delayed and Delivery exception keep
  * their existing shared colours, so this bar still agrees with every status
  * badge elsewhere on the page.
  */

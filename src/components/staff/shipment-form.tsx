@@ -10,12 +10,14 @@ import type { StaffShipment } from "@/lib/dto/shipment";
 import {
   SERVICE_LEVELS,
   SERVICE_LEVEL_LABEL,
-  SHIPMENT_STATUSES,
   SHIPMENT_TYPES,
   SHIPMENT_TYPE_LABEL,
   STATUS_LABEL,
 } from "@/lib/domain/status";
-import { TRACKING_NUMBER_PATTERN } from "@/lib/domain/tracking-number";
+import {
+  TRACKING_DIGITS_PATTERN,
+  TRACKING_NUMBER_PREFIX,
+} from "@/lib/domain/tracking-number";
 import { Alert } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -33,10 +35,9 @@ const formSchema = z.object({
   trackingNumber: z
     .string()
     .trim()
-    .refine((value) => value === "" || TRACKING_NUMBER_PATTERN.test(value.toUpperCase()), {
-      message: "Use 6 to 40 characters: letters, digits and hyphens only",
+    .refine((value) => value === "" || TRACKING_DIGITS_PATTERN.test(value), {
+      message: "Use digits only, up to 6",
     }),
-  status: z.enum(SHIPMENT_STATUSES),
   originCity: z.string().trim().min(1, "Origin city is required"),
   originCountry: z.string().trim().min(1, "Origin country is required"),
   destinationCity: z.string().trim().min(1, "Destination city is required"),
@@ -56,7 +57,6 @@ type FormValues = z.input<typeof formSchema>;
 
 const FIELD_NAMES = [
   "trackingNumber",
-  "status",
   "originCity",
   "originCountry",
   "destinationCity",
@@ -80,6 +80,9 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
   const router = useRouter();
   const toast = useToast();
   const [formError, setFormError] = useState<string | null>(null);
+  // Stays true once the server has saved, so the button cannot be pressed again
+  // while the next page loads, which would create a second shipment.
+  const [saved, setSaved] = useState(false);
 
   const editing = shipment !== undefined;
 
@@ -91,8 +94,8 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      trackingNumber: shipment?.trackingNumber ?? "",
-      status: shipment?.status ?? "CREATED",
+      // Only the digits typed for a new shipment; an existing number is shown, not edited.
+      trackingNumber: "",
       originCity: shipment?.origin.city ?? "",
       originCountry: shipment?.origin.country ?? "United Kingdom",
       destinationCity: shipment?.destination.city ?? "",
@@ -109,6 +112,8 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
     },
   });
 
+  const trackingNumberField = register("trackingNumber");
+
   const onSubmit = handleSubmit(async (raw) => {
     setFormError(null);
     const values = formSchema.parse(raw);
@@ -116,7 +121,6 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
     // Empty optional fields are omitted rather than sent as empty strings, so a
     // partial update never blanks something the operator did not touch.
     const payload: Record<string, unknown> = {
-      status: values.status,
       originCity: values.originCity,
       originCountry: values.originCountry,
       destinationCity: values.destinationCity,
@@ -140,12 +144,13 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
           "PATCH",
           payload,
         );
+        setSaved(true);
         toast.success(`Shipment ${response.shipment.trackingNumber} updated`);
         router.push(`/staff/shipments/${shipment.id}`);
         router.refresh();
       } else {
         if (values.trackingNumber) {
-          payload.trackingNumber = values.trackingNumber.toUpperCase();
+          payload.trackingNumber = `${TRACKING_NUMBER_PREFIX}${values.trackingNumber}`;
         }
 
         const response = await apiSend<{ shipment: StaffShipment }>(
@@ -153,6 +158,7 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
           "POST",
           payload,
         );
+        setSaved(true);
         toast.success(`Shipment ${response.shipment.trackingNumber} created`);
         router.push(`/staff/shipments/${response.shipment.id}`);
         router.refresh();
@@ -204,28 +210,46 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
           <Field
             label="Tracking number"
             required={false}
-            hint="Leave blank and we will generate one."
+            hint={`Type the digits only, ${TRACKING_NUMBER_PREFIX} is added for you. Leave blank to use the next free number.`}
             error={errors.trackingNumber?.message}
             className="sm:col-span-2"
           >
-            <Input
-              {...register("trackingNumber")}
-              className="font-mono uppercase"
-              autoComplete="off"
-              spellCheck={false}
-            />
+            <div className="flex">
+              <span
+                aria-hidden="true"
+                className="inline-flex shrink-0 items-center whitespace-nowrap rounded-l-lg border border-r-0 border-edge bg-surface-sunken px-3 font-mono text-sm font-semibold text-ink-muted"
+              >
+                {TRACKING_NUMBER_PREFIX}
+              </span>
+              <Input
+                {...trackingNumberField}
+                onChange={(event) => {
+                  // Only digits can be typed, so the number always fits the format.
+                  event.target.value = event.target.value.replace(/\D/g, "").slice(0, 6);
+                  void trackingNumberField.onChange(event);
+                }}
+                inputMode="numeric"
+                placeholder="006"
+                className="rounded-l-none font-mono"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
           </Field>
         )}
 
-        <Field label="Status" required error={errors.status?.message}>
-          <Select {...register("status")}>
-            {SHIPMENT_STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {STATUS_LABEL[value]}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        {/* Status is never edited here: it follows the tracking events. */}
+        <div>
+          <p className="text-sm font-medium text-ink">Status</p>
+          <p className="mt-1.5 inline-flex rounded-lg bg-surface-sunken px-3 py-2 text-sm font-semibold text-ink">
+            {STATUS_LABEL[shipment?.status ?? "CREATED"]}
+          </p>
+          <p className="mt-1.5 text-sm text-ink-muted">
+            {editing
+              ? "The status changes when you add a tracking event on the shipment page."
+              : "Every new shipment starts here. Its status then moves on with the tracking events."}
+          </p>
+        </div>
 
         <Field label="Service level" required error={errors.serviceLevel?.message}>
           <Select {...register("serviceLevel")}>
@@ -321,7 +345,7 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
           </ButtonLink>
           <Button
             type="submit"
-            loading={isSubmitting}
+            loading={isSubmitting || saved}
             loadingLabel={editing ? "Saving..." : "Creating..."}
           >
             {editing ? "Save changes" : "Create shipment"}

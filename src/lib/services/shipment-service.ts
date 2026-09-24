@@ -1,11 +1,16 @@
 import { Prisma, type ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { errors } from "@/lib/api/errors";
-import { ATTENTION_STATUSES, NEEDS_ATTENTION_FILTER } from "@/lib/domain/status";
+import {
+  ATTENTION_STATUSES,
+  NEEDS_ATTENTION_FILTER,
+  STATUS_LABEL,
+} from "@/lib/domain/status";
 import { EVENT_ORDER_BY } from "@/lib/domain/ordering";
 import {
-  generateTrackingNumber,
+  nextTrackingNumber,
   normaliseTrackingNumber,
+  TRACKING_NUMBER_PREFIX,
 } from "@/lib/domain/tracking-number";
 import {
   toPublicShipment,
@@ -20,6 +25,7 @@ import {
 } from "@/lib/dto/shipment";
 import { toPublicEvent, toStaffEvent } from "@/lib/dto/event";
 import { diffShipment, recordShipmentChange } from "./shipment-audit";
+import { assertCanMoveTo } from "./status-transition";
 import type {
   CreateShipmentInput,
   ShipmentQuery,
@@ -239,23 +245,14 @@ export async function getShipmentIdByTrackingNumber(
   return shipment?.id ?? null;
 }
 
-/**
- * Allocates a unique tracking number. Uniqueness is ultimately guaranteed by
- * the database constraint; this loop just avoids a pointless round trip on the
- * rare collision.
- */
+/** The number after the highest TRK-DEMO- number already issued. */
 async function allocateTrackingNumber(): Promise<string> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const candidate = generateTrackingNumber();
-    const existing = await prisma.shipment.findUnique({
-      where: { trackingNumber: candidate },
-      select: { trackingNumber: true },
-    });
+  const issued = await prisma.shipment.findMany({
+    where: { trackingNumber: { startsWith: TRACKING_NUMBER_PREFIX } },
+    select: { trackingNumber: true },
+  });
 
-    if (!existing) return candidate;
-  }
-
-  throw errors.internal();
+  return nextTrackingNumber(issued.map((shipment) => shipment.trackingNumber));
 }
 
 /**
@@ -264,65 +261,81 @@ async function allocateTrackingNumber(): Promise<string> {
  * passes the signed-in staff member.
  */
 export async function createShipment(input: CreateShipmentInput, staffUserId?: string) {
-  const trackingNumber = input.trackingNumber
-    ? normaliseTrackingNumber(input.trackingNumber)
-    : await allocateTrackingNumber();
-
-  // A supplied number that is already taken is an ordinary, expected outcome,
-  // so it is answered without attempting the insert. Letting the insert fail
-  // would log a database error for every such request and bury real failures.
-  // The unique constraint below still decides the race between two requests.
   if (input.trackingNumber) {
+    // A supplied number that is already taken is an ordinary, expected outcome,
+    // so it is answered without attempting the insert. Letting the insert fail
+    // would log a database error for every such request and bury real failures.
+    // The unique constraint still decides the race between two requests.
     const existing = await prisma.shipment.findUnique({
-      where: { trackingNumber },
+      where: { trackingNumber: input.trackingNumber },
       select: { id: true },
     });
 
     if (existing) {
-      throw errors.trackingNumberTaken(trackingNumber);
+      throw errors.trackingNumberTaken(input.trackingNumber);
+    }
+
+    try {
+      return await insertShipment(input, input.trackingNumber, staffUserId);
+    } catch (error) {
+      if (isUniqueViolation(error)) throw errors.trackingNumberTaken(input.trackingNumber);
+      throw error;
     }
   }
 
-  try {
-    const created = await prisma.shipment.create({
-      data: {
-        trackingNumber,
-        status: input.status,
-        originCity: input.originCity,
-        originCountry: input.originCountry,
-        destinationCity: input.destinationCity,
-        destinationCountry: input.destinationCountry,
-        estimatedDelivery: input.estimatedDelivery,
-        // A shipment with no stated location has not moved yet, so the origin
-        // is the honest answer rather than an empty field.
-        currentLocation: input.currentLocation ?? input.originCity,
-        serviceLevel: input.serviceLevel,
-        ...(input.shipmentType ? { shipmentType: input.shipmentType } : {}),
-        packageCount: input.packageCount,
-        ...(input.weightKg === undefined
-          ? {}
-          : { weightKg: new Prisma.Decimal(input.weightKg) }),
-        ...(input.customerReference
-          ? { customerReference: input.customerReference }
-          : {}),
-        // Nested, so the shipment and its first audit entry are one statement.
-        auditEntries: {
-          create: { action: "CREATED", staffUserId: staffUserId ?? null },
-        },
+  // Two shipments created at the same moment can be offered the same next
+  // number; the unique constraint rejects the second, which then takes the one
+  // after it.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await insertShipment(input, await allocateTrackingNumber(), staffUserId);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+    }
+  }
+
+  throw errors.internal();
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+async function insertShipment(
+  input: CreateShipmentInput,
+  trackingNumber: string,
+  staffUserId?: string,
+) {
+  const created = await prisma.shipment.create({
+    data: {
+      trackingNumber,
+      status: input.status,
+      originCity: input.originCity,
+      originCountry: input.originCountry,
+      destinationCity: input.destinationCity,
+      destinationCountry: input.destinationCountry,
+      estimatedDelivery: input.estimatedDelivery,
+      // A shipment with no stated location has not moved yet, so the origin
+      // is the honest answer rather than an empty field.
+      currentLocation: input.currentLocation ?? input.originCity,
+      serviceLevel: input.serviceLevel,
+      ...(input.shipmentType ? { shipmentType: input.shipmentType } : {}),
+      packageCount: input.packageCount,
+      ...(input.weightKg === undefined
+        ? {}
+        : { weightKg: new Prisma.Decimal(input.weightKg) }),
+      ...(input.customerReference
+        ? { customerReference: input.customerReference }
+        : {}),
+      // Nested, so the shipment and its first audit entry are one statement.
+      auditEntries: {
+        create: { action: "CREATED", staffUserId: staffUserId ?? null },
       },
-      select: staffShipmentSelect,
-    });
+    },
+    select: staffShipmentSelect,
+  });
 
-    return toStaffShipment(created);
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
-      throw errors.trackingNumberTaken(trackingNumber);
-    }
-    throw error;
-  }
+  return toStaffShipment(created);
 }
 
 /**
@@ -432,6 +445,11 @@ export async function updateShipment(
     }
 
     if (input.status) {
+      // Only a real change has to follow the journey. The staff screens change
+      // status through events; this keeps the API under the same rules.
+      if (input.status !== existing.status) {
+        await assertCanMoveTo(tx, id, "status", existing.status, input.status);
+      }
       await assertDeliveredHasEvent(id, input.status, tx);
     }
 
@@ -447,6 +465,30 @@ export async function updateShipment(
       changes: diffShipment(existing, updated),
       staffUserId: staffUserId ?? null,
     });
+
+    // A status change leaves a row in the timeline, so the customer's latest
+    // update never contradicts the status above it. Skipped when the latest
+    // event already says the same thing.
+    if (input.status && input.status !== existing.status) {
+      const latest = await tx.trackingEvent.findFirst({
+        where: { shipmentId: id },
+        orderBy: [...EVENT_ORDER_BY],
+        select: { type: true },
+      });
+
+      if (latest?.type !== input.status) {
+        await tx.trackingEvent.create({
+          data: {
+            shipmentId: id,
+            occurredAt: new Date(),
+            location: updated.currentLocation ?? updated.originCity,
+            type: input.status,
+            message: `Shipment status changed to ${STATUS_LABEL[input.status]}.`,
+            createdById: staffUserId ?? null,
+          },
+        });
+      }
+    }
 
     return toStaffShipment(updated);
   });

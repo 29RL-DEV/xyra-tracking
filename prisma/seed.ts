@@ -32,6 +32,8 @@ const prisma = new PrismaClient();
 
 const DEMO_STAFF_EMAIL = "staff@demo.test";
 const DEMO_STAFF_NAME = "Demo Operator";
+const SECOND_STAFF_EMAIL = "staff2@demo.test";
+const SECOND_STAFF_NAME = "Demo Operator 2";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -340,25 +342,25 @@ const fillerStatuses: ShipmentStatus[] = [
 const SERVICE_CYCLE: ServiceLevel[] = ["STANDARD", "EXPRESS", "ECONOMY"];
 const TYPE_CYCLE: ShipmentType[] = ["PARCEL", "PALLET", "DOCUMENT"];
 
-/** Deterministic filler numbers, distinguishable at a glance from the demo set. */
+/** Deterministic filler numbers, continuing the TRK-DEMO- sequence after the five scenarios. */
 const fillerNumbers = [
-  "TRK-4KP2M9",
-  "TRK-7QT3VH",
-  "TRK-9XJ5RB",
-  "TRK-2WN8KD",
-  "TRK-6HZ4PC",
-  "TRK-3MY7TF",
-  "TRK-8VC2QN",
-  "TRK-5RB9JK",
-  "TRK-4TD6WM",
-  "TRK-7KN3ZP",
-  "TRK-2PJ8HV",
-  "TRK-9CF5MB",
-  "TRK-6XQ2TR",
-  "TRK-3ZW7KD",
-  "TRK-8HM4NJ",
-  "TRK-5VT9PC",
-  "TRK-4JB3QF",
+  "TRK-DEMO-006",
+  "TRK-DEMO-007",
+  "TRK-DEMO-008",
+  "TRK-DEMO-009",
+  "TRK-DEMO-010",
+  "TRK-DEMO-011",
+  "TRK-DEMO-012",
+  "TRK-DEMO-013",
+  "TRK-DEMO-014",
+  "TRK-DEMO-015",
+  "TRK-DEMO-016",
+  "TRK-DEMO-017",
+  "TRK-DEMO-018",
+  "TRK-DEMO-019",
+  "TRK-DEMO-020",
+  "TRK-DEMO-021",
+  "TRK-DEMO-022",
 ];
 
 function eventsForStatus(status: ShipmentStatus, origin: string, destination: string): SeedEvent[] {
@@ -510,7 +512,7 @@ const demoEnquiries: SeedEnquiry[] = [
     hoursAgo: 28,
   },
   {
-    trackingNumber: "TRK-4KP2M9",
+    trackingNumber: "TRK-DEMO-006",
     category: "COLLECTION_ISSUE",
     message:
       "Nobody came to collect this yesterday even though it was booked for the afternoon. Can it be rebooked?",
@@ -518,7 +520,7 @@ const demoEnquiries: SeedEnquiry[] = [
     hoursAgo: 50,
   },
   {
-    trackingNumber: "TRK-7QT3VH",
+    trackingNumber: "TRK-DEMO-007",
     category: "DELIVERY_DELAY",
     message:
       "This has been showing the same status for two days. Is it still moving or is there a problem?",
@@ -569,6 +571,11 @@ async function main() {
       name: DEMO_STAFF_NAME,
       passwordHash,
     },
+  });
+
+  // A second operator, so the change history can show who made which change.
+  await prisma.staffUser.create({
+    data: { email: SECOND_STAFF_EMAIL, name: SECOND_STAFF_NAME, passwordHash },
   });
 
   const shipments = [...demoShipments, ...buildFillerShipments()];
@@ -663,8 +670,8 @@ async function main() {
   console.log("Seed complete:", counts);
   console.log(
     plan.isLocal
-      ? `Demo staff login: ${DEMO_STAFF_EMAIL} / ${staffPassword}`
-      : `Demo staff login: ${DEMO_STAFF_EMAIL} / (the SEED_STAFF_PASSWORD you supplied)`,
+      ? `Demo staff logins: ${DEMO_STAFF_EMAIL} and ${SECOND_STAFF_EMAIL} / ${staffPassword}`
+      : `Demo staff logins: ${DEMO_STAFF_EMAIL} and ${SECOND_STAFF_EMAIL} / (the SEED_STAFF_PASSWORD you supplied)`,
   );
   console.log(
     "Demo tracking numbers: TRK-DEMO-001, TRK-DEMO-002, TRK-DEMO-003, TRK-DEMO-004, TRK-DEMO-005",

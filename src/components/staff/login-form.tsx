@@ -19,12 +19,15 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>;
 
 /**
- * The one seeded account, matching what `npm run db:seed` creates and what
- * the README documents. Shown here so a reviewer can sign in without leaving
- * the page — the credential itself is already public in the README, so
- * displaying it again exposes nothing new.
+ * The seeded accounts, matching what `npm run db:seed` creates and what the
+ * README documents. "Use this" fills the form in so a reviewer can sign in
+ * without leaving the page; the password itself is not shown here, since it is
+ * already public in the README.
  */
-const DEMO_STAFF_EMAIL = "staff@demo.test";
+const DEMO_ACCOUNTS = [
+  { name: "Demo Operator", email: "staff@demo.test" },
+  { name: "Demo Operator 2", email: "staff2@demo.test" },
+] as const;
 const DEMO_STAFF_PASSWORD = "DemoStaff2026!";
 
 export function LoginForm() {
@@ -58,10 +61,10 @@ export function LoginForm() {
     if (formError) errorRef.current?.focus();
   }, [formError]);
 
-  const fillDemoCredentials = () => {
+  const fillDemoCredentials = (email: string) => {
     // Fills the fields for review; it does not submit. Signing in is still a
     // deliberate, visible action.
-    setValue("email", DEMO_STAFF_EMAIL, { shouldValidate: true });
+    setValue("email", email, { shouldValidate: true });
     setValue("password", DEMO_STAFF_PASSWORD, { shouldValidate: true });
     setFormError(null);
   };
@@ -75,7 +78,7 @@ export function LoginForm() {
       // `next` comes from the URL, so it is limited to staff paths: accepting
       // any value would let a crafted link send someone to another site after
       // they sign in.
-      router.replace(next && next.startsWith("/staff") ? next : "/staff/shipments");
+      router.replace(next && next.startsWith("/staff") ? next : "/staff");
       router.refresh();
     } catch (error) {
       if (error instanceof ApiError) {
@@ -153,22 +156,28 @@ export function LoginForm() {
         <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
           Demo credentials
         </p>
-        <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-sm text-ink">
-          <span>{DEMO_STAFF_EMAIL}</span>
-          <span aria-hidden="true" className="text-ink-subtle">
-            /
-          </span>
-          <span>{DEMO_STAFF_PASSWORD}</span>
-        </p>
-        <button
-          type="button"
-          onClick={fillDemoCredentials}
-          className="mt-2.5 inline-flex items-center gap-1.5 rounded text-sm font-semibold text-brand-700 hover:text-brand-800 hover:underline"
-        >
-          <Wand2 className="h-3.5 w-3.5" aria-hidden="true" />
-          Use this
-          <span className="sr-only"> to fill in the form above</span>
-        </button>
+        <ul className="mt-2 divide-y divide-line-strong/60">
+          {DEMO_ACCOUNTS.map((account) => (
+            <li
+              key={account.email}
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-ink">{account.name}</p>
+                <p className="truncate font-mono text-sm text-ink-muted">{account.email}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => fillDemoCredentials(account.email)}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded text-sm font-semibold text-brand-700 hover:text-brand-800 hover:underline"
+              >
+                <Wand2 className="h-3.5 w-3.5" aria-hidden="true" />
+                Use this
+                <span className="sr-only"> account to fill in the form above</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
     </form>
   );

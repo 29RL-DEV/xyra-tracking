@@ -8,7 +8,7 @@ async function signIn(page: Page) {
   await page.getByLabel(/Email address/i).fill(STAFF_EMAIL);
   await page.getByLabel(/Password/i).fill(STAFF_PASSWORD);
   await page.getByRole("button", { name: /^Sign in$/i }).click();
-  await expect(page.getByRole("heading", { name: "Shipments", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Operations overview", exact: true })).toBeVisible();
 }
 
 test.describe("operational basics", () => {

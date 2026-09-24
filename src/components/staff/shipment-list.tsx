@@ -141,7 +141,7 @@ export function ShipmentList() {
             type="search"
             value={queryInput}
             onChange={(event) => setQueryInput(event.target.value)}
-            placeholder="e.g. TRK-DEMO or 4KP2"
+            placeholder="e.g. TRK-DEMO-012 or 012"
             autoComplete="off"
             spellCheck={false}
             leadingIcon={<Search className="h-4 w-4" />}

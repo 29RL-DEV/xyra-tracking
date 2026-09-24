@@ -8,7 +8,7 @@ async function signIn(page: Page) {
   await page.getByLabel(/Email address/i).fill(STAFF_EMAIL);
   await page.getByLabel(/Password/i).fill(STAFF_PASSWORD);
   await page.getByRole("button", { name: /^Sign in$/i }).click();
-  await expect(page.getByRole("heading", { name: "Shipments", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Operations overview", exact: true })).toBeVisible();
 }
 
 /**
@@ -41,17 +41,18 @@ test.describe("staff operations", () => {
 
     // The `next` parameter comes from the URL, so the login form only follows
     // it when it points back into /staff; anything else falls back to the
-    // shipment list rather than becoming an open redirect.
+    // overview rather than becoming an open redirect.
     await page.goto("/staff/login?next=https%3A%2F%2Fevil.example.com");
     await page.getByLabel(/Email address/i).fill(STAFF_EMAIL);
     await page.getByLabel(/Password/i).fill(STAFF_PASSWORD);
     await page.getByRole("button", { name: /^Sign in$/i }).click();
 
-    await expect(page).toHaveURL(/\/staff\/shipments$/);
+    await expect(page).toHaveURL(/\/staff$/);
   });
 
   test("signs in and lists shipments", { tag: "@mobile" }, async ({ page }) => {
     await signIn(page);
+    await page.goto("/staff/shipments");
 
     // The result count ("22 shipments"), not the navigation item of the same name.
     await expect(page.getByText(/^\d+ shipments?$/).first()).toBeVisible();
@@ -70,7 +71,8 @@ test.describe("staff operations", () => {
     await expect(page.getByRole("link", { name: "TRK-DEMO-003" })).toBeVisible();
     await expect(page.getByRole("link", { name: "TRK-DEMO-001" })).toHaveCount(0);
 
-    await page.goto("/staff/shipments?q=TRK-DEMO");
+    // Every number is TRK-DEMO- now, so narrow the search to one page of results.
+    await page.goto("/staff/shipments?q=TRK-DEMO-00");
     await expect(page.getByRole("link", { name: "TRK-DEMO-001" })).toBeVisible();
 
     await page.getByLabel(/^Status/i).selectOption("DELAYED");

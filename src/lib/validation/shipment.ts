@@ -5,7 +5,10 @@ import {
   SHIPMENT_STATUSES,
   SHIPMENT_TYPES,
 } from "@/lib/domain/status";
-import { TRACKING_NUMBER_PATTERN } from "@/lib/domain/tracking-number";
+import {
+  NEW_TRACKING_NUMBER_PATTERN,
+  trackingNumberFromDigits,
+} from "@/lib/domain/tracking-number";
 import { dateOnly, optionalText, pageNumber, text } from "./common";
 
 const statusEnum = z.enum(SHIPMENT_STATUSES, {
@@ -42,13 +45,21 @@ export const createShipmentSchema = z
       .string()
       .trim()
       .transform((value) => value.toUpperCase())
-      .refine((value) => value === "" || TRACKING_NUMBER_PATTERN.test(value), {
-        message:
-          "Use 6 to 40 characters: capital letters, digits and hyphens only",
+      .refine((value) => value === "" || NEW_TRACKING_NUMBER_PATTERN.test(value), {
+        message: "Use TRK-DEMO- followed by up to 6 digits, for example TRK-DEMO-006",
       })
       .optional()
-      .transform((value) => (value === "" ? undefined : value)),
-    status: statusEnum.default("CREATED"),
+      .transform((value) => {
+        const digits = value ? NEW_TRACKING_NUMBER_PATTERN.exec(value)?.[1] : undefined;
+        return digits ? trackingNumberFromDigits(digits) : undefined;
+      }),
+    // A new shipment always starts as Created. Every later status comes from
+    // tracking events, so the journey rules apply from the very first step.
+    status: z
+      .literal("CREATED", {
+        errorMap: () => ({ message: "A new shipment always starts as Created" }),
+      })
+      .default("CREATED"),
     originCity: text("Origin city", 1, 80),
     originCountry: text("Origin country", 1, 56),
     destinationCity: text("Destination city", 1, 80),

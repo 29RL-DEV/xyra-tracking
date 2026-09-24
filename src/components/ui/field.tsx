@@ -88,9 +88,16 @@ export function Field({
           >
             {label}
             {required === true ? (
-              <span className={cn("ml-1.5 text-xs font-normal", inverse ? "text-brand-200" : "text-ink-subtle")}>
-                (required)
-              </span>
+              <>
+                <span
+                  aria-hidden="true"
+                  className={cn("ml-0.5 font-semibold", inverse ? "text-red-200" : "text-red-600")}
+                >
+                  *
+                </span>
+                {/* The star is visual only; a screen reader still hears "required". */}
+                <span className="sr-only"> (required)</span>
+              </>
             ) : null}
             {required === false ? (
               <span className={cn("ml-1.5 text-xs font-normal", inverse ? "text-brand-200" : "text-ink-subtle")}>

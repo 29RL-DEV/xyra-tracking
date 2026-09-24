@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/db";
+import { splitHistoryAt, STATUS_LABEL, statusesAllowedBetween } from "@/lib/domain/status";
 import { errors } from "@/lib/api/errors";
 import { toStaffEvent, type StaffEvent } from "@/lib/dto/event";
 import type { AuditChanges } from "@/lib/dto/shipment";
 import type { CreateEventInput } from "@/lib/validation/event";
 import { recordShipmentChange } from "./shipment-audit";
+import { assertCanMoveTo } from "./status-transition";
 
 /**
  * Tolerance for clock skew between an operator's browser and the server. A
@@ -80,6 +82,42 @@ export async function addEvent(
 
     if (input.type === "DELIVERED" && !becomesLatest) {
       throw errors.deliveredEventNotLatest();
+    }
+
+    // Only an event that becomes the latest update moves the shipment, so only
+    // that one has to follow the journey. A back-dated event fills in history.
+    if (becomesLatest) {
+      const current = await tx.shipment.findUniqueOrThrow({
+        where: { id: shipmentId },
+        select: { status: true },
+      });
+      await assertCanMoveTo(tx, shipmentId, "type", current.status, input.type);
+    } else {
+      // A back-dated event has to fit where it is dated: after what came before
+      // it, and before what came after it, so the timeline stays in order.
+      const history = await tx.trackingEvent.findMany({
+        where: { shipmentId },
+        select: { type: true, occurredAt: true },
+      });
+      const { before, after } = splitHistoryAt(history, occurredAt);
+
+      if (before.length === 0) {
+        throw errors.eventOutOfOrder(
+          "occurredAt",
+          "An earlier event cannot be dated before the shipment's first event.",
+        );
+      }
+
+      const allowed = statusesAllowedBetween(before, after);
+      if (!allowed.includes(input.type)) {
+        const there = allowed.map((status) => STATUS_LABEL[status]).join(", ");
+        throw errors.eventOutOfOrder(
+          "type",
+          allowed.length === 0
+            ? `The history cannot take a "${STATUS_LABEL[input.type]}" event at that time.`
+            : `A "${STATUS_LABEL[input.type]}" event does not fit at that time. There it can be: ${there}.`,
+        );
+      }
     }
 
     const event = await tx.trackingEvent.create({

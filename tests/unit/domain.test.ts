@@ -4,10 +4,9 @@ import {
   orderEventsNewestFirst,
 } from "@/lib/domain/ordering";
 import {
-  generateTrackingNumber,
   isValidTrackingNumber,
+  nextTrackingNumber,
   normaliseTrackingNumber,
-  TRACKING_NUMBER_PATTERN,
 } from "@/lib/domain/tracking-number";
 import {
   formatDate,
@@ -79,14 +78,16 @@ describe("tracking numbers", () => {
     expect(normaliseTrackingNumber("  trk-demo-001 ")).toBe("TRK-DEMO-001");
   });
 
-  it("generates valid, unambiguous tracking numbers", () => {
-    // 0/O, 1/I, L and U are excluded on purpose: they get misread aloud.
-    for (let i = 0; i < 200; i += 1) {
-      const generated = generateTrackingNumber();
-      expect(generated).toMatch(/^TRK-[A-Z0-9]{6}$/);
-      expect(TRACKING_NUMBER_PATTERN.test(generated)).toBe(true);
-      expect(generated.slice(4)).not.toMatch(/[01ILOU]/);
-    }
+  it("gives a new shipment the number after the highest one issued", () => {
+    expect(nextTrackingNumber([])).toBe("TRK-DEMO-001");
+    expect(nextTrackingNumber(["TRK-DEMO-001", "TRK-DEMO-022", "TRK-DEMO-008"])).toBe(
+      "TRK-DEMO-023",
+    );
+    // Numbers in another format do not affect the sequence.
+    expect(nextTrackingNumber(["TRK-DEMO-005", "TRK-4KP2M9", "TRK-TEST-900"])).toBe(
+      "TRK-DEMO-006",
+    );
+    expect(isValidTrackingNumber(nextTrackingNumber(["TRK-DEMO-999"]))).toBe(true);
   });
 });
 

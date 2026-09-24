@@ -15,6 +15,8 @@ export type ErrorCode =
   | "EVENT_IN_FUTURE"
   | "DELIVERED_REQUIRES_EVENT"
   | "DELIVERED_EVENT_NOT_LATEST"
+  | "INVALID_STATUS_TRANSITION"
+  | "EVENT_OUT_OF_ORDER"
   | "IMMUTABLE_FIELD"
   | "UNAUTHENTICATED"
   | "SESSION_EXPIRED"
@@ -98,6 +100,24 @@ export const errors = {
       "A delivered event must be the latest update. This shipment already has a later event.",
       { occurredAt: "Delivery must be dated after the shipment's latest event." },
     ),
+
+  invalidStatusTransition: (
+    field: "type" | "status",
+    from: string,
+    to: string,
+    allowed: string[],
+  ) =>
+    new AppError(
+      "INVALID_STATUS_TRANSITION",
+      422,
+      allowed.length === 0
+        ? `A shipment that is "${from}" is final and cannot move to "${to}".`
+        : `A shipment that is "${from}" cannot move to "${to}". From here it can go to: ${allowed.join(", ")}.`,
+      { [field]: "This status does not follow from the shipment's current one." },
+    ),
+
+  eventOutOfOrder: (field: "occurredAt" | "type", message: string) =>
+    new AppError("EVENT_OUT_OF_ORDER", 422, message, { [field]: message }),
 
   immutableField: (field: string, explanation: string) =>
     new AppError("IMMUTABLE_FIELD", 400, explanation, { [field]: explanation }),

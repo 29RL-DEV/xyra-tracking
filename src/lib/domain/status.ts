@@ -33,7 +33,20 @@ export const STATUS_LABEL: Record<ShipmentStatus, string> = {
   OUT_FOR_DELIVERY: "Out for delivery",
   DELIVERED: "Delivered",
   DELAYED: "Delayed",
-  EXCEPTION: "Needs attention",
+  EXCEPTION: "Delivery exception",
+};
+
+/**
+ * The customer message used when staff leave it blank on a routine step. Delays
+ * and problems have none: the customer must be told what happened, so staff
+ * write that message themselves.
+ */
+export const DEFAULT_EVENT_MESSAGE: Partial<Record<ShipmentStatus, string>> = {
+  CREATED: "Your shipment has been created.",
+  COLLECTED: "Your shipment has been collected.",
+  IN_TRANSIT: "Your shipment is on its way.",
+  OUT_FOR_DELIVERY: "Your shipment is out for delivery today.",
+  DELIVERED: "Your shipment has been delivered.",
 };
 
 /** One-line explanation shown beneath the status on the public tracking page. */
@@ -139,4 +152,110 @@ export function isShipmentStatus(value: unknown): value is ShipmentStatus {
     typeof value === "string" &&
     (SHIPMENT_STATUSES as readonly string[]).includes(value)
   );
+}
+
+/**
+ * The steps of the journey, in order. Delayed and Exception are not steps: they
+ * interrupt the journey at whatever step it had reached.
+ */
+const PROGRESS_STATUSES: readonly ShipmentStatus[] = [
+  "CREATED",
+  "COLLECTED",
+  "IN_TRANSIT",
+  "OUT_FOR_DELIVERY",
+  "DELIVERED",
+];
+
+/**
+ * Where a shipment can go from each step. Progress only moves forward, one step
+ * at a time. In transit is one long stage (every hub and depot on the way is an
+ * In transit event with its own location), and only from there can a shipment
+ * go back to Collected, when it is returned to the depot it came from. Once out
+ * for delivery it can only be delivered, or run into a delay or problem.
+ * Delivered is final.
+ */
+const NEXT_STEPS: Record<ShipmentStatus, readonly ShipmentStatus[]> = {
+  CREATED: ["COLLECTED", "DELAYED", "EXCEPTION"],
+  COLLECTED: ["IN_TRANSIT", "DELAYED", "EXCEPTION"],
+  IN_TRANSIT: ["IN_TRANSIT", "OUT_FOR_DELIVERY", "COLLECTED", "DELAYED", "EXCEPTION"],
+  OUT_FOR_DELIVERY: ["DELIVERED", "DELAYED", "EXCEPTION"],
+  DELIVERED: [],
+  DELAYED: [],
+  EXCEPTION: [],
+};
+
+/**
+ * The step a shipment had reached: the newest event that is not a delay or a
+ * problem. `typesNewestFirst` are its event types, newest first.
+ */
+export function journeyStep(typesNewestFirst: readonly ShipmentStatus[]): ShipmentStatus {
+  return typesNewestFirst.find((type) => PROGRESS_STATUSES.includes(type)) ?? "CREATED";
+}
+
+/**
+ * The statuses a shipment can move to next. After a delay or a problem it can
+ * get further updates of either kind, or carry on from the step it had reached:
+ * repeat that step when a step can happen more than once (another hub, another
+ * delivery attempt), or move on to the next one. It can never jump ahead.
+ */
+export function allowedNextStatuses(
+  current: ShipmentStatus,
+  step: ShipmentStatus,
+): ShipmentStatus[] {
+  if (current !== "DELAYED" && current !== "EXCEPTION") return [...NEXT_STEPS[current]];
+
+  const resume = step === "IN_TRANSIT" || step === "OUT_FOR_DELIVERY" ? [step] : [];
+  // Going back to Collected (returned to the depot it came from) is only offered
+  // straight from In transit, never as a way out of a delay or a problem. From
+  // Created, Collected is the next step forward and stays.
+  const onward = NEXT_STEPS[step].filter(
+    (status) =>
+      status !== "DELAYED" &&
+      status !== "EXCEPTION" &&
+      !(step === "IN_TRANSIT" && status === "COLLECTED"),
+  );
+
+  return [...new Set<ShipmentStatus>([...resume, ...onward, "DELAYED", "EXCEPTION"])];
+}
+
+/**
+ * The statuses an event may have when it is added into the middle of the
+ * history, dated after `before` (oldest first) and ahead of the event `after`.
+ * It has to follow what came before it and be followable by what came after, by
+ * the same rules as the journey itself. Empty when nothing came before it, since
+ * nothing can be dated ahead of the shipment's first event.
+ */
+export function statusesAllowedBetween(
+  before: readonly ShipmentStatus[],
+  after: ShipmentStatus | null,
+): ShipmentStatus[] {
+  const previous = before[before.length - 1];
+  if (!previous) return [];
+
+  const newestFirst = [...before].reverse();
+
+  return allowedNextStatuses(previous, journeyStep(newestFirst)).filter(
+    (candidate) =>
+      after === null ||
+      allowedNextStatuses(candidate, journeyStep([candidate, ...newestFirst])).includes(after),
+  );
+}
+
+/**
+ * Splits a history at a moment: the event types dated at or before it (oldest
+ * first), and the type of the first event dated after it.
+ */
+export function splitHistoryAt(
+  history: readonly { type: ShipmentStatus; occurredAt: string | Date }[],
+  moment: Date,
+): { before: ShipmentStatus[]; after: ShipmentStatus | null } {
+  const sorted = [...history].sort(
+    (a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
+  );
+  const at = moment.getTime();
+
+  return {
+    before: sorted.filter((event) => new Date(event.occurredAt).getTime() <= at).map((e) => e.type),
+    after: sorted.find((event) => new Date(event.occurredAt).getTime() > at)?.type ?? null,
+  };
 }

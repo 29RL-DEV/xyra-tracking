@@ -43,7 +43,7 @@ const DEMO_NUMBERS = [
   { number: "TRK-DEMO-001", scenario: "In transit" },
   { number: "TRK-DEMO-002", scenario: "Delivered" },
   { number: "TRK-DEMO-003", scenario: "Delayed" },
-  { number: "TRK-DEMO-004", scenario: "Needs attention" },
+  { number: "TRK-DEMO-004", scenario: "Delivery exception" },
   { number: "TRK-DEMO-005", scenario: "Collected" },
 ];
 

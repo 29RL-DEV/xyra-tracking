@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { DateTime } from "@/components/ui/date-time";
 import { Field, Textarea } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/states";
+import { StaffBadge } from "@/components/ui/staff-badge";
 import { useToast } from "@/components/ui/toast";
 
 /**
@@ -121,7 +122,7 @@ export function InternalNotes({
                 {note.body}
               </p>
               <p className="mt-2 flex flex-wrap items-center gap-x-2 text-xs text-ink-muted">
-                <span className="font-semibold text-ink">{note.author.name}</span>
+                <StaffBadge name={note.author.name} />
                 <span aria-hidden="true">·</span>
                 <DateTime value={note.createdAt} />
               </p>

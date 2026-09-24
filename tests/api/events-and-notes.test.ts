@@ -181,16 +181,18 @@ describe("tracking events", () => {
     });
 
     it("accepts a backdated event and sorts it into position", async () => {
-      const longAgo = new Date(Date.now() - 200 * 3_600_000).toISOString();
+      // Between the fixture's Collected (72h ago) and In transit (24h ago) events.
+      const earlier = new Date(Date.now() - 48 * 3_600_000).toISOString();
 
-      await addEvent(
+      const response = await addEvent(
         send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
           ...VALID_EVENT,
-          occurredAt: longAgo,
+          occurredAt: earlier,
           message: "A historical record added late.",
         }),
         params({ id: fixtures.inTransitId }),
       );
+      expect(response.status).toBe(201);
 
       const body = await readJson<PublicTrackingResult>(
         await publicTrack(
@@ -199,10 +201,13 @@ describe("tracking events", () => {
         ),
       );
 
-      // Oldest, so it belongs at the end rather than presented as the latest.
-      expect(body.events[body.events.length - 1]?.message).toBe(
+      // Sorted by when it happened, so it sits between the two, not on top as
+      // if it were the latest update.
+      expect(body.events.map((event) => event.message)).toEqual([
+        "In transit through the network.",
         "A historical record added late.",
-      );
+        "Collected from the sender.",
+      ]);
     });
   });
 
@@ -256,13 +261,14 @@ describe("tracking events", () => {
         where: { id: fixtures.delayedId },
       });
 
+      // Between the fixture's In transit (48h ago) and Delayed (6h ago) events.
       const response = await addEvent(
         send(`/api/staff/shipments/${fixtures.delayedId}/events`, "POST", {
           ...VALID_EVENT,
-          type: "COLLECTED",
-          location: "Calderwick depot",
-          message: "Collected from the sender.",
-          occurredAt: new Date(Date.now() - 100 * 3_600_000).toISOString(),
+          type: "IN_TRANSIT",
+          location: "Calderwick hub",
+          message: "Arrived at the Calderwick hub.",
+          occurredAt: new Date(Date.now() - 24 * 3_600_000).toISOString(),
         }),
         params({ id: fixtures.delayedId }),
       );
@@ -297,6 +303,15 @@ describe("tracking events", () => {
     });
 
     it("marks the shipment delivered with a delivered event that is the latest update", async () => {
+      await addEvent(
+        send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
+          location: "Westmoor Quay delivery depot",
+          type: "OUT_FOR_DELIVERY",
+          message: "With the driver for delivery today.",
+        }),
+        params({ id: fixtures.inTransitId }),
+      );
+
       const response = await addEvent(
         send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
           location: "Westmoor Quay",

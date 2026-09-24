@@ -10,7 +10,7 @@ async function signIn(page: Page) {
   await page.getByLabel(/Email address/i).fill("staff@demo.test");
   await page.getByLabel(/Password/i).fill("DemoStaff2026!");
   await page.getByRole("button", { name: /^Sign in$/i }).click();
-  await expect(page.getByRole("heading", { name: "Shipments", exact: true })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Operations overview", exact: true })).toBeVisible({
     timeout: 60_000,
   });
 }
@@ -74,7 +74,7 @@ test.describe("keyboard and semantics", () => {
     await page.keyboard.type("DemoStaff2026!");
     await page.keyboard.press("Enter");
 
-    await expect(page.getByRole("heading", { name: "Shipments", exact: true })).toBeVisible({
+    await expect(page.getByRole("heading", { name: "Operations overview", exact: true })).toBeVisible({
       timeout: 60_000,
     });
   });

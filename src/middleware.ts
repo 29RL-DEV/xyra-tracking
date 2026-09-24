@@ -20,7 +20,7 @@ export async function middleware(request: NextRequest) {
 
   if (pathname === "/staff/login") {
     if (authenticated) {
-      return NextResponse.redirect(new URL("/staff/shipments", request.url));
+      return NextResponse.redirect(new URL("/staff", request.url));
     }
     return NextResponse.next();
   }

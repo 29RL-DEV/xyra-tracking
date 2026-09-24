@@ -90,7 +90,7 @@ export const TONE_STYLES: Record<
     ring: "ring-[#EA580C]/25",
   },
   danger: {
-    // #DC2626 — red (Needs attention)
+    // #DC2626 — red (Delivery exception)
     badge: "bg-[#DC2626]/15 text-[#DC2626]",
     solid: "bg-[#DC2626] text-white",
     soft: "bg-[#DC2626]/10 text-[#DC2626]",
