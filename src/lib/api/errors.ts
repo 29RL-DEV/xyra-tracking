@@ -14,6 +14,7 @@ export type ErrorCode =
   | "INVALID_STATUS"
   | "EVENT_IN_FUTURE"
   | "DELIVERED_REQUIRES_EVENT"
+  | "DELIVERED_EVENT_NOT_LATEST"
   | "IMMUTABLE_FIELD"
   | "UNAUTHENTICATED"
   | "SESSION_EXPIRED"
@@ -88,6 +89,14 @@ export const errors = {
       422,
       "Add a delivered event before marking this shipment as delivered, so the customer can see when it arrived.",
       { status: "This shipment has no delivered event yet." },
+    ),
+
+  deliveredEventNotLatest: () =>
+    new AppError(
+      "DELIVERED_EVENT_NOT_LATEST",
+      422,
+      "A delivered event must be the latest update. This shipment already has a later event.",
+      { occurredAt: "Delivery must be dated after the shipment's latest event." },
     ),
 
   immutableField: (field: string, explanation: string) =>

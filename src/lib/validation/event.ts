@@ -10,11 +10,6 @@ export const createEventSchema = z
       errorMap: () => ({ message: "Choose one of the supported event types" }),
     }),
     message: text("Message", 3, 280),
-    /**
-     * Opt-in propagation. Default off, so back-filling a historical event never
-     * silently drags the shipment's present state backwards.
-     */
-    updateShipment: z.coerce.boolean().default(false),
   })
   .strict();
 

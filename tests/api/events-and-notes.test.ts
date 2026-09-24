@@ -206,40 +206,19 @@ describe("tracking events", () => {
     });
   });
 
-  describe("optional status and location propagation", () => {
-    it("leaves the shipment untouched when the option is off", async () => {
-      const before = await prisma.shipment.findUniqueOrThrow({
-        where: { id: fixtures.inTransitId },
-      });
-
-      await addEvent(
-        send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
-          ...VALID_EVENT,
-          type: "OUT_FOR_DELIVERY",
-          location: "Somewhere else entirely",
-          updateShipment: false,
-        }),
-        params({ id: fixtures.inTransitId }),
-      );
-
-      const after = await prisma.shipment.findUniqueOrThrow({
-        where: { id: fixtures.inTransitId },
-      });
-
-      expect(after.status).toBe(before.status);
-      expect(after.currentLocation).toBe(before.currentLocation);
-    });
-
-    it("updates status and location when the option is on", async () => {
-      await addEvent(
+  describe("the latest event is the shipment's current state", () => {
+    it("sets status and location from an event that becomes the latest update", async () => {
+      const response = await addEvent(
         send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
           ...VALID_EVENT,
           type: "OUT_FOR_DELIVERY",
           location: "Westmoor Quay delivery depot",
-          updateShipment: true,
         }),
         params({ id: fixtures.inTransitId }),
       );
+
+      expect(response.status).toBe(201);
+      expect((await readJson<{ shipmentUpdated: boolean }>(response)).shipmentUpdated).toBe(true);
 
       const after = await prisma.shipment.findUniqueOrThrow({
         where: { id: fixtures.inTransitId },
@@ -249,13 +228,80 @@ describe("tracking events", () => {
       expect(after.currentLocation).toBe("Westmoor Quay delivery depot");
     });
 
-    it("lets a delivered event and the delivered status be applied together", async () => {
+    it("keeps the public latest update and status in agreement", async () => {
+      // The scenario a reviewer found: a delayed shipment given a newer event
+      // must not keep saying "Delayed" above a latest update that says otherwise.
+      await addEvent(
+        send(`/api/staff/shipments/${fixtures.delayedId}/events`, "POST", {
+          ...VALID_EVENT,
+          location: "Marsden Vale sorting centre",
+          message: "The route has reopened and the shipment is moving again.",
+        }),
+        params({ id: fixtures.delayedId }),
+      );
+
+      const body = await readJson<PublicTrackingResult>(
+        await publicTrack(
+          get("/api/shipments/TRK-TEST-003"),
+          params({ trackingNumber: "TRK-TEST-003" }),
+        ),
+      );
+
+      expect(body.events[0]?.type).toBe("IN_TRANSIT");
+      expect(body.shipment.status).toBe("IN_TRANSIT");
+    });
+
+    it("leaves the shipment untouched when a back-dated event only fills in history", async () => {
+      const before = await prisma.shipment.findUniqueOrThrow({
+        where: { id: fixtures.delayedId },
+      });
+
+      const response = await addEvent(
+        send(`/api/staff/shipments/${fixtures.delayedId}/events`, "POST", {
+          ...VALID_EVENT,
+          type: "COLLECTED",
+          location: "Calderwick depot",
+          message: "Collected from the sender.",
+          occurredAt: new Date(Date.now() - 100 * 3_600_000).toISOString(),
+        }),
+        params({ id: fixtures.delayedId }),
+      );
+
+      expect(response.status).toBe(201);
+      expect((await readJson<{ shipmentUpdated: boolean }>(response)).shipmentUpdated).toBe(false);
+
+      const after = await prisma.shipment.findUniqueOrThrow({
+        where: { id: fixtures.delayedId },
+      });
+
+      expect(after.status).toBe(before.status);
+      expect(after.currentLocation).toBe(before.currentLocation);
+    });
+
+    it("sets the status on a shipment's first event", async () => {
+      await addEvent(
+        send(`/api/staff/shipments/${fixtures.emptyTimelineId}/events`, "POST", {
+          ...VALID_EVENT,
+          type: "COLLECTED",
+          location: "Ashmarket depot",
+          message: "Collected from the sender.",
+          occurredAt: new Date(Date.now() - 500 * 3_600_000).toISOString(),
+        }),
+        params({ id: fixtures.emptyTimelineId }),
+      );
+
+      const after = await prisma.shipment.findUniqueOrThrow({
+        where: { id: fixtures.emptyTimelineId },
+      });
+      expect(after.status).toBe("COLLECTED");
+    });
+
+    it("marks the shipment delivered with a delivered event that is the latest update", async () => {
       const response = await addEvent(
         send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
           location: "Westmoor Quay",
           type: "DELIVERED",
           message: "Delivered and signed for.",
-          updateShipment: true,
         }),
         params({ id: fixtures.inTransitId }),
       );
@@ -266,6 +312,45 @@ describe("tracking events", () => {
         where: { id: fixtures.inTransitId },
       });
       expect(after.status).toBe("DELIVERED");
+    });
+
+    it("rejects a back-dated delivered event and writes nothing", async () => {
+      const eventsBefore = await prisma.trackingEvent.count({
+        where: { shipmentId: fixtures.delayedId },
+      });
+
+      const response = await addEvent(
+        send(`/api/staff/shipments/${fixtures.delayedId}/events`, "POST", {
+          location: "Thornbeck",
+          type: "DELIVERED",
+          message: "Delivered and signed for.",
+          occurredAt: new Date(Date.now() - 24 * 3_600_000).toISOString(),
+        }),
+        params({ id: fixtures.delayedId }),
+      );
+
+      expect(response.status).toBe(422);
+      expect((await readJson<ErrorBody>(response)).error.code).toBe("DELIVERED_EVENT_NOT_LATEST");
+
+      expect(
+        await prisma.trackingEvent.count({ where: { shipmentId: fixtures.delayedId } }),
+      ).toBe(eventsBefore);
+      const after = await prisma.shipment.findUniqueOrThrow({
+        where: { id: fixtures.delayedId },
+      });
+      expect(after.status).toBe("DELAYED");
+    });
+
+    it("no longer accepts a client-chosen propagation flag", async () => {
+      const response = await addEvent(
+        send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
+          ...VALID_EVENT,
+          updateShipment: false,
+        }),
+        params({ id: fixtures.inTransitId }),
+      );
+
+      expect(response.status).toBe(400);
     });
   });
 });

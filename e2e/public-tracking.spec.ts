@@ -39,6 +39,16 @@ test.describe("public tracking", () => {
     },
   );
 
+  test("answers a link to an unknown number with 404 and the same not-found state", async ({
+    page,
+  }) => {
+    const response = await page.goto("/track/TRK-NOPE-999");
+
+    expect(response?.status()).toBe(404);
+    await expect(page.getByText(/could not find TRK-NOPE-999/i)).toBeVisible();
+    await expect(page.getByLabel(/Tracking number/i)).toBeVisible();
+  });
+
   test("shows a delayed shipment with both estimates and an explanation", async ({
     page,
   }) => {

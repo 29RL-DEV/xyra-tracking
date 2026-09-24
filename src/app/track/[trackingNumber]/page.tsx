@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { notFound } from "next/navigation";
 import { SiteFooter, SiteHeader } from "@/components/public/site-header";
 import { TrackingExperience } from "@/components/public/tracking-experience";
 import { AppError, errors } from "@/lib/api/errors";
@@ -37,12 +38,16 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
  *
  * It reads the same data as the public API, so it draws on the same per-client
  * lookup budget — otherwise the page would be a way round the API's limit.
+ *
+ * An unknown or malformed number answers with HTTP 404, like the API does. The
+ * app's not-found page recognises a tracking URL and shows this page's own
+ * "not found" state, so the customer can correct the number in place.
  */
 export default async function TrackPage({ params }: PageProps) {
   const raw = normaliseTrackingNumber(decodeURIComponent((await params).trackingNumber));
 
   let result: PublicTrackingResult | undefined;
-  let notFound = false;
+  let missing = false;
   let lookupError: string | undefined;
 
   const { allowed } = checkRateLimit(
@@ -57,14 +62,16 @@ export default async function TrackPage({ params }: PageProps) {
       result = await getPublicShipment(raw);
     } catch (error) {
       if (error instanceof AppError && error.code === "SHIPMENT_NOT_FOUND") {
-        notFound = true;
+        missing = true;
       } else {
         throw error;
       }
     }
   } else {
-    notFound = true;
+    missing = true;
   }
+
+  if (missing) notFound();
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -74,7 +81,6 @@ export default async function TrackPage({ params }: PageProps) {
         <TrackingExperience
           initialTrackingNumber={raw}
           {...(result ? { initialResult: result } : {})}
-          initialNotFound={notFound}
           {...(lookupError ? { initialError: lookupError } : {})}
         />
       </main>

@@ -14,12 +14,18 @@ const MILESTONES: Array<{ status: ShipmentStatus; label: string }> = [
   { status: "DELIVERED", label: "Delivered" },
 ];
 
+/** A delayed or held shipment has not been delivered, whatever its history holds. */
+const LAST_UNDELIVERED_STEP = MILESTONES.findIndex(
+  (milestone) => milestone.status === "OUT_FOR_DELIVERY",
+);
+
 /**
  * How far along the journey the shipment is. A delayed or held shipment is
- * placed at the furthest milestone its history shows, and that step is drawn
- * in the delay or exception treatment rather than as normal progress.
+ * placed at the furthest milestone its history shows, short of delivery, and
+ * that step is drawn in the delay or exception treatment rather than as normal
+ * progress.
  */
-function progressIndex(status: ShipmentStatus, events: PublicEvent[]): number {
+export function progressIndex(status: ShipmentStatus, events: PublicEvent[]): number {
   const direct = MILESTONES.findIndex((milestone) => milestone.status === status);
   if (direct !== -1) return direct;
 
@@ -27,7 +33,7 @@ function progressIndex(status: ShipmentStatus, events: PublicEvent[]): number {
     .map((event) => MILESTONES.findIndex((milestone) => milestone.status === event.type))
     .filter((index) => index !== -1);
 
-  return reached.length > 0 ? Math.max(...reached) : 0;
+  return reached.length > 0 ? Math.min(Math.max(...reached), LAST_UNDELIVERED_STEP) : 0;
 }
 
 /**

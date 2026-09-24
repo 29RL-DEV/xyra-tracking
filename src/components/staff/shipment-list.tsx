@@ -6,7 +6,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, PackageSearch, Plus, Search, X } from "lucide-react";
 import { ApiError, apiGet } from "@/lib/api-client";
 import type { StaffShipmentListItem } from "@/lib/dto/shipment";
-import { isShipmentStatus, SHIPMENT_STATUSES, STATUS_LABEL } from "@/lib/domain/status";
+import {
+  isShipmentStatus,
+  NEEDS_ATTENTION_FILTER,
+  NEEDS_ATTENTION_FILTER_LABEL,
+  SHIPMENT_STATUSES,
+  STATUS_LABEL,
+} from "@/lib/domain/status";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DateOnly, DateTime, RelativeTime } from "@/components/ui/date-time";
@@ -149,6 +155,7 @@ export function ShipmentList() {
             onChange={(event) => updateParams({ status: event.target.value })}
           >
             <option value="">All statuses</option>
+            <option value={NEEDS_ATTENTION_FILTER}>{NEEDS_ATTENTION_FILTER_LABEL}</option>
             {SHIPMENT_STATUSES.map((value) => (
               <option key={value} value={value}>
                 {STATUS_LABEL[value]}

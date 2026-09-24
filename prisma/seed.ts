@@ -58,6 +58,27 @@ interface SeedEvent {
   message: string;
 }
 
+/**
+ * Every journey starts with the record being created, which is the first step
+ * the customer's progress tracker shows. Scenarios that begin later get that
+ * event prepended, half a day before their first event and at the same place,
+ * so the timeline never skips the step the tracker marks as done.
+ */
+function withCreatedEvent(events: SeedEvent[]): SeedEvent[] {
+  const first = events[0];
+  if (!first || first.type === "CREATED") return events;
+
+  return [
+    {
+      hoursAgo: first.hoursAgo + 12,
+      location: first.location,
+      type: "CREATED",
+      message: "Shipment details received. Awaiting collection.",
+    },
+    ...events,
+  ];
+}
+
 interface SeedShipment {
   trackingNumber: string;
   status: ShipmentStatus;
@@ -582,7 +603,7 @@ async function main() {
       },
     });
 
-    for (const event of shipment.events) {
+    for (const event of withCreatedEvent(shipment.events)) {
       await prisma.trackingEvent.create({
         data: {
           shipmentId: created.id,

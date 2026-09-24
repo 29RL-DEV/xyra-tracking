@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { TrackingTimeline } from "@/components/public/tracking-timeline";
 import { ShipmentSummary } from "@/components/public/shipment-summary";
+import { JourneyRail } from "@/components/public/journey-rail";
 import { SHIPMENT_STATUSES } from "@/lib/domain/status";
 import type { PublicEvent } from "@/lib/dto/event";
 import type { PublicShipment } from "@/lib/dto/shipment";
@@ -99,6 +100,53 @@ describe("TrackingTimeline", () => {
 
     expect(screen.queryByText(/2026-09-20T09:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Sept? 2026/).length).toBeGreaterThan(0);
+  });
+});
+
+describe("JourneyRail", () => {
+  const step = (label: string) =>
+    within(screen.getByRole("list", { name: "Delivery progress" }))
+      .getByText(label, { exact: false })
+      .closest("li");
+
+  it("never shows a delayed shipment as delivered, whatever its history holds", () => {
+    render(
+      <JourneyRail
+        shipment={{ ...baseShipment, status: "DELAYED" }}
+        events={[
+          {
+            occurredAt: "2026-09-21T09:00:00Z",
+            location: "Marsden Vale",
+            type: "DELAYED",
+            message: "Held by a route closure.",
+          },
+          {
+            occurredAt: "2026-09-20T09:00:00Z",
+            location: "Thornbeck",
+            type: "DELIVERED",
+            message: "A delivered event recorded in error.",
+          },
+          ...events,
+        ]}
+        currentLocation="Marsden Vale"
+      />,
+    );
+
+    expect(step("Delivered")).toHaveTextContent("not yet reached");
+    expect(step("Out for delivery")).toHaveAttribute("aria-current", "step");
+  });
+
+  it("places a delayed shipment at the furthest step its history shows", () => {
+    render(
+      <JourneyRail
+        shipment={{ ...baseShipment, status: "DELAYED" }}
+        events={events}
+        currentLocation="Gralebridge hub"
+      />,
+    );
+
+    expect(step("In transit")).toHaveAttribute("aria-current", "step");
+    expect(step("Collected")).toHaveTextContent("completed");
   });
 });
 

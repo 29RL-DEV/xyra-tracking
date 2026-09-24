@@ -153,7 +153,6 @@ describe("audit trail", () => {
         type: "OUT_FOR_DELIVERY",
         location: "Redhaven delivery depot",
         message: "With the driver for delivery today.",
-        updateShipment: true,
       }),
       params({ id: fixtures.inTransitId }),
     );

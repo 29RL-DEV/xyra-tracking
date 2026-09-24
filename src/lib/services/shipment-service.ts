@@ -1,7 +1,7 @@
 import { Prisma, type ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { errors } from "@/lib/api/errors";
-import { ATTENTION_STATUSES } from "@/lib/domain/status";
+import { ATTENTION_STATUSES, NEEDS_ATTENTION_FILTER } from "@/lib/domain/status";
 import { EVENT_ORDER_BY } from "@/lib/domain/ordering";
 import {
   generateTrackingNumber,
@@ -119,7 +119,9 @@ export async function listShipments(
 ): Promise<ShipmentListResult> {
   const where: Prisma.ShipmentWhereInput = {};
 
-  if (query.status) {
+  if (query.status === NEEDS_ATTENTION_FILTER) {
+    where.status = { in: ATTENTION_STATUSES };
+  } else if (query.status) {
     where.status = query.status;
   }
 

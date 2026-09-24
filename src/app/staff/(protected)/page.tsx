@@ -4,6 +4,8 @@ import { ArrowRight, CheckCircle2, ChevronRight, Package, Plus } from "lucide-re
 import type { ShipmentStatus } from "@prisma/client";
 import {
   ATTENTION_STATUSES,
+  NEEDS_ATTENTION_FILTER,
+  NEEDS_ATTENTION_FILTER_LABEL,
   SHIPMENT_STATUSES,
   STATUS_LABEL,
 } from "@/lib/domain/status";
@@ -88,8 +90,8 @@ export default async function StaffOverviewPage() {
                 detail={`${total} in total, ${delivered} delivered`}
               />
               <Metric
-                href="#attention-heading"
-                label="Delayed or held"
+                href={`/staff/shipments?status=${NEEDS_ATTENTION_FILTER}`}
+                label={NEEDS_ATTENTION_FILTER_LABEL}
                 value={attention}
                 detail={attentionBreakdown}
                 tone={attention > 0 ? "danger" : "neutral"}

@@ -58,29 +58,39 @@ export function formatTime(value: string | Date, timeZone?: string): string {
   }).format(date);
 }
 
-/** Shown alongside the absolute time, never instead of it. */
-export function formatRelative(value: string | Date): string {
+/** Whole calendar days from `earlier` to `later`, in the viewer's timezone. */
+function calendarDaysBetween(earlier: Date, later: Date): number {
+  const start = new Date(earlier.getFullYear(), earlier.getMonth(), earlier.getDate());
+  const end = new Date(later.getFullYear(), later.getMonth(), later.getDate());
+  // Rounded, not floored: across a daylight-saving change a day is 23 or 25 hours.
+  return Math.round((end.getTime() - start.getTime()) / 86_400_000);
+}
+
+/**
+ * Shown alongside the absolute time, never instead of it.
+ *
+ * Anything older than an hour on an earlier date is described in calendar days,
+ * so every time on one date gets the same phrase: two events on 21 September
+ * both read "2 days ago" rather than "2 days" and "3 days" depending on the
+ * hour. Within the same day, and for the last hour, it counts hours or minutes.
+ */
+export function formatRelative(value: string | Date, now: Date = new Date()): string {
   const date = typeof value === "string" ? new Date(value) : value;
   if (Number.isNaN(date.getTime())) return "";
 
-  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
-  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ["year", 31536000],
-    ["month", 2592000],
-    ["day", 86400],
-    ["hour", 3600],
-    ["minute", 60],
-  ];
-
   const formatter = new Intl.RelativeTimeFormat("en-GB", { numeric: "auto" });
+  const seconds = Math.round((now.getTime() - date.getTime()) / 1000);
+  const days = calendarDaysBetween(date, now);
 
-  for (const [unit, secondsPerUnit] of units) {
-    if (Math.abs(seconds) >= secondsPerUnit) {
-      return formatter.format(-Math.round(seconds / secondsPerUnit), unit);
-    }
+  if (days === 0 || Math.abs(seconds) < 3600) {
+    if (Math.abs(seconds) >= 3600) return formatter.format(-Math.round(seconds / 3600), "hour");
+    if (Math.abs(seconds) >= 60) return formatter.format(-Math.round(seconds / 60), "minute");
+    return "just now";
   }
 
-  return "just now";
+  if (Math.abs(days) < 30) return formatter.format(-days, "day");
+  if (Math.abs(days) < 365) return formatter.format(-Math.round(days / 30), "month");
+  return formatter.format(-Math.round(days / 365), "year");
 }
 
 /** Value for a datetime-local input, in the viewer's own timezone. */

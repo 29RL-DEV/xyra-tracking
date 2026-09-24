@@ -123,6 +123,13 @@ export const ATTENTION_STATUSES: ShipmentStatus[] = SHIPMENT_STATUSES.filter(
   (status) => NEEDS_ATTENTION[status],
 );
 
+/**
+ * Staff list filter value selecting every attention status at once, so the
+ * overview's "Delayed or held" figure links to exactly the shipments it counts.
+ */
+export const NEEDS_ATTENTION_FILTER = "NEEDS_ATTENTION";
+export const NEEDS_ATTENTION_FILTER_LABEL = "Delayed or held";
+
 export function isAttentionStatus(status: ShipmentStatus): boolean {
   return NEEDS_ATTENTION[status];
 }

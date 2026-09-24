@@ -9,7 +9,12 @@ import {
   normaliseTrackingNumber,
   TRACKING_NUMBER_PATTERN,
 } from "@/lib/domain/tracking-number";
-import { formatDate, formatDateTime, toDateOnlyString } from "@/lib/format/date";
+import {
+  formatDate,
+  formatDateTime,
+  formatRelative,
+  toDateOnlyString,
+} from "@/lib/format/date";
 import {
   ATTENTION_STATUSES,
   isAttentionStatus,
@@ -99,6 +104,36 @@ describe("date formatting", () => {
     expect(rendered).toMatch(/21 Sept? 2026/);
     expect(rendered).toMatch(/GMT/);
     expect(rendered).not.toContain("T14:03");
+  });
+});
+
+describe("relative times", () => {
+  // Built from local date parts, so the calendar-day rule is checked in
+  // whatever timezone the suite runs in.
+  const now = new Date(2026, 8, 23, 22, 0);
+
+  it("gives every time on one date the same phrase", () => {
+    // 54 and 62 hours ago: rounding hours would call these 2 and 3 days.
+    expect(formatRelative(new Date(2026, 8, 21, 16, 0), now)).toBe("2 days ago");
+    expect(formatRelative(new Date(2026, 8, 21, 8, 0), now)).toBe("2 days ago");
+  });
+
+  it("calls the previous date yesterday, however few hours ago it was", () => {
+    expect(formatRelative(new Date(2026, 8, 22, 21, 0), now)).toBe("yesterday");
+    expect(formatRelative(new Date(2026, 8, 22, 1, 0), now)).toBe("yesterday");
+  });
+
+  it("counts hours and minutes within the same day", () => {
+    expect(formatRelative(new Date(2026, 8, 23, 19, 0), now)).toBe("3 hours ago");
+    expect(formatRelative(new Date(2026, 8, 23, 21, 45), now)).toBe("15 minutes ago");
+    expect(formatRelative(new Date(2026, 8, 23, 21, 59, 50), now)).toBe("just now");
+  });
+
+  it("counts minutes across midnight rather than jumping to yesterday", () => {
+    const justAfterMidnight = new Date(2026, 8, 24, 0, 10);
+    expect(formatRelative(new Date(2026, 8, 23, 23, 40), justAfterMidnight)).toBe(
+      "30 minutes ago",
+    );
   });
 });
 

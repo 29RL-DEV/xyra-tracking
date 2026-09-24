@@ -24,6 +24,7 @@ const staffEventSelect = {
 
 export interface AddEventResult {
   event: StaffEvent;
+  /** True when the event became the latest update and set the shipment's state. */
   shipmentUpdated: boolean;
 }
 
@@ -32,9 +33,18 @@ export interface AddEventResult {
  * the application: there is no update and no delete, which is what makes the
  * history append-only.
  *
- * When `updateShipment` is set, the event insert and the shipment update share
- * one transaction, so a failure can never leave the event recorded without the
- * status change it was meant to carry.
+ * The latest event is the shipment's current state. An event dated at or after
+ * every existing event becomes the latest update, so it also sets the
+ * shipment's status and current location — the customer can never see a
+ * "latest update" that contradicts the status above it. A back-dated event
+ * fills in history only and leaves the shipment as it is, so recording
+ * something that happened earlier can never drag the present state backwards.
+ *
+ * A delivered event must be the latest update: delivery is the end of the
+ * journey, and a timeline that continues after it would contradict itself.
+ *
+ * The latest-event read, the insert and the shipment update share one
+ * transaction, so the event is never recorded without the state it carries.
  */
 export async function addEvent(
   shipmentId: string,
@@ -57,10 +67,21 @@ export async function addEvent(
     throw errors.eventInFuture();
   }
 
-  // No delivered guard is needed on this path: propagating a DELIVERED event
-  // creates that event in the same transaction, so the shipment can never end
-  // up delivered with nothing in the timeline to show for it.
-  const created = await prisma.$transaction(async (tx) => {
+  // The shipment's delivered guard is satisfied here by construction: a
+  // DELIVERED event that becomes the latest update is created in the same
+  // transaction that marks the shipment delivered.
+  const result = await prisma.$transaction(async (tx) => {
+    const latest = await tx.trackingEvent.findFirst({
+      where: { shipmentId },
+      orderBy: [{ occurredAt: "desc" }],
+      select: { occurredAt: true },
+    });
+    const becomesLatest = !latest || occurredAt.getTime() >= latest.occurredAt.getTime();
+
+    if (input.type === "DELIVERED" && !becomesLatest) {
+      throw errors.deliveredEventNotLatest();
+    }
+
     const event = await tx.trackingEvent.create({
       data: {
         shipmentId,
@@ -73,7 +94,7 @@ export async function addEvent(
       select: staffEventSelect,
     });
 
-    if (input.updateShipment) {
+    if (becomesLatest) {
       // The values the event replaces, read in the same transaction, so the
       // audit trail records exactly what this event changed.
       const before = await tx.shipment.findUniqueOrThrow({
@@ -108,11 +129,11 @@ export async function addEvent(
       });
     }
 
-    return event;
+    return { event, becomesLatest };
   });
 
   return {
-    event: toStaffEvent(created),
-    shipmentUpdated: input.updateShipment,
+    event: toStaffEvent(result.event),
+    shipmentUpdated: result.becomesLatest,
   };
 }

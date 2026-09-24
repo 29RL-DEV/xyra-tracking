@@ -61,6 +61,19 @@ describe("staff shipments API", () => {
       expect(body.shipments[0]?.status).toBe("DELAYED");
     });
 
+    it("filters delayed and held shipments together, as the overview counts them", async () => {
+      const response = await list(get("/api/staff/shipments?status=NEEDS_ATTENTION"));
+      expect(response.status).toBe(200);
+
+      const body = await readJson<{ shipments: StaffShipment[]; total: number }>(response);
+
+      expect(body.total).toBe(2);
+      expect(body.shipments.map((shipment) => shipment.status).sort()).toEqual([
+        "DELAYED",
+        "EXCEPTION",
+      ]);
+    });
+
     it("rejects an unsupported status with 400, not 500", async () => {
       const response = await list(get("/api/staff/shipments?status=NONSENSE"));
 

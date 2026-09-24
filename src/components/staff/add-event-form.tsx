@@ -23,7 +23,6 @@ const formSchema = z.object({
     .trim()
     .min(3, "Write a short message the customer can understand")
     .max(280, "Keep the message to 280 characters or fewer"),
-  updateShipment: z.boolean(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -31,9 +30,10 @@ type FormValues = z.infer<typeof formSchema>;
 /**
  * Appends a tracking event.
  *
- * The propagation checkbox is off by default and stated in plain words:
- * back-filling a historical event must never silently drag the shipment's
- * present status backwards.
+ * The server decides whether the event changes the shipment: the newest event
+ * sets its status and location, a back-dated one only fills in history. The
+ * form states that rule rather than offering a choice that could leave the
+ * customer's latest update contradicting the status.
  */
 export function AddEventForm({ shipmentId }: { shipmentId: string }) {
   const router = useRouter();
@@ -57,7 +57,6 @@ export function AddEventForm({ shipmentId }: { shipmentId: string }) {
       location: "",
       type: "IN_TRANSIT",
       message: "",
-      updateShipment: false,
     },
   });
 
@@ -69,20 +68,23 @@ export function AddEventForm({ shipmentId }: { shipmentId: string }) {
     setFormError(null);
 
     try {
-      await apiSend(`/api/staff/shipments/${shipmentId}/events`, "POST", {
-        // datetime-local has no timezone; convert from the operator's local
-        // time to an absolute instant before sending.
-        occurredAt: new Date(values.occurredAt).toISOString(),
-        location: values.location,
-        type: values.type,
-        message: values.message,
-        updateShipment: values.updateShipment,
-      });
+      const result = await apiSend<{ shipmentUpdated: boolean }>(
+        `/api/staff/shipments/${shipmentId}/events`,
+        "POST",
+        {
+          // datetime-local has no timezone; convert from the operator's local
+          // time to an absolute instant before sending.
+          occurredAt: new Date(values.occurredAt).toISOString(),
+          location: values.location,
+          type: values.type,
+          message: values.message,
+        },
+      );
 
       toast.success(
-        values.updateShipment
+        result.shipmentUpdated
           ? "Event added and shipment updated"
-          : "Event added to the tracking history",
+          : "Earlier event added to the tracking history",
       );
 
       reset({
@@ -90,7 +92,6 @@ export function AddEventForm({ shipmentId }: { shipmentId: string }) {
         location: "",
         type: values.type,
         message: "",
-        updateShipment: false,
       });
 
       router.refresh();
@@ -161,22 +162,13 @@ export function AddEventForm({ shipmentId }: { shipmentId: string }) {
         </Field>
       </div>
 
-      <label className="flex cursor-pointer items-start gap-3 rounded-lg bg-white p-4 text-sm shadow-sm transition-colors hover:bg-surface has-[:checked]:bg-brand-50">
-        <input
-          type="checkbox"
-          {...register("updateShipment")}
-          className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-edge accent-brand-700"
-        />
-        <span className="text-ink">
-          <span className="font-medium">
-            Also update the shipment&apos;s status and current location to match this event
-          </span>
-          <span className="mt-0.5 block text-ink-muted">
-            Leave this unchecked when recording something that happened earlier, so the
-            shipment keeps its current state.
-          </span>
-        </span>
-      </label>
+      <p className="rounded-lg bg-white p-4 text-sm text-ink-muted shadow-sm">
+        <span className="font-medium text-ink">
+          The newest event sets the shipment&apos;s status and current location.
+        </span>{" "}
+        An event dated before the latest update is added to the history only, so the
+        shipment keeps its current state.
+      </p>
 
       <div className="flex justify-end">
         <Button type="submit" loading={isSubmitting} loadingLabel="Adding event...">

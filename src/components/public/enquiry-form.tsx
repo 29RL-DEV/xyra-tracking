@@ -60,7 +60,9 @@ export function EnquiryForm({ trackingNumber }: { trackingNumber: string }) {
     defaultValues: { trackingNumber, category: "DELIVERY_DELAY", message: "" },
   });
 
-  const messageLength = (watch("message") ?? "").length;
+  // Counted as validated: leading and trailing spaces are trimmed before the
+  // length is checked, so they do not count towards the minimum or the limit.
+  const messageLength = (watch("message") ?? "").trim().length;
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);

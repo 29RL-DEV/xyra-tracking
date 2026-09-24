@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  NEEDS_ATTENTION_FILTER,
   SERVICE_LEVELS,
   SHIPMENT_STATUSES,
   SHIPMENT_TYPES,
@@ -93,7 +94,11 @@ export type UpdateShipmentInput = z.infer<typeof updateShipmentSchema>;
 export const shipmentQuerySchema = z
   .object({
     q: z.string().trim().max(100).optional(),
-    status: statusEnum.optional(),
+    status: z
+      .enum([...SHIPMENT_STATUSES, NEEDS_ATTENTION_FILTER], {
+        errorMap: () => ({ message: "Choose one of the supported statuses" }),
+      })
+      .optional(),
     page: pageNumber,
   })
   .strict();
