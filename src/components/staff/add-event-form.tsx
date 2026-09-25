@@ -87,17 +87,26 @@ export function AddEventForm({
     },
   });
 
+  // The time the field was filled in with. While the operator leaves it alone the
+  // event happens "now", and the server supplies that instant: this computer's
+  // clock can run a few seconds behind the server's, which would otherwise date
+  // an event before the one the server has just recorded.
+  const [defaultTime, setDefaultTime] = useState("");
+
   useEffect(() => {
-    setValue("occurredAt", toLocalDateTimeInput(new Date()));
+    const now = toLocalDateTimeInput(new Date());
+    setDefaultTime(now);
+    setValue("occurredAt", now);
   }, [setValue]);
 
   const type = watch("type");
   const occurredAt = watch("occurredAt");
+  const isNow = occurredAt === defaultTime;
 
   // An event dated before the latest one only fills in history, so it must fit
   // where it is dated. Anything at or after the latest event follows the journey.
   const { tooEarly, typeOptions } = useMemo(() => {
-    const moment = occurredAt === "" ? null : momentOf(occurredAt);
+    const moment = occurredAt === "" || isNow ? null : momentOf(occurredAt);
     const latest = history.reduce((max, event) => Math.max(max, new Date(event.occurredAt).getTime()), 0);
 
     if (moment && history.length > 0 && moment.getTime() < latest) {
@@ -115,7 +124,7 @@ export function AddEventForm({
       tooEarly: false,
       typeOptions: (next.length > 0 ? next : [currentStatus]) as readonly ShipmentStatus[],
     };
-  }, [occurredAt, history, currentStatus, journeyStep]);
+  }, [occurredAt, isNow, history, currentStatus, journeyStep]);
 
   useEffect(() => {
     const first = typeOptions[0];
@@ -153,9 +162,11 @@ export function AddEventForm({
         `/api/staff/shipments/${shipmentId}/events`,
         "POST",
         {
-          // datetime-local has no timezone; convert from the operator's local
-          // time to an absolute instant before sending.
-          occurredAt: momentOf(values.occurredAt).toISOString(),
+          // Left at "now", the server dates it. Otherwise datetime-local has no
+          // timezone, so the operator's local time becomes an absolute instant.
+          ...(values.occurredAt === defaultTime
+            ? {}
+            : { occurredAt: momentOf(values.occurredAt).toISOString() }),
           location: values.location,
           type: values.type,
           ...(values.message ? { message: values.message } : {}),
@@ -168,8 +179,10 @@ export function AddEventForm({
           : "Earlier event added to the tracking history",
       );
 
+      const now = toLocalDateTimeInput(new Date());
+      setDefaultTime(now);
       reset({
-        occurredAt: toLocalDateTimeInput(new Date()),
+        occurredAt: now,
         location: "",
         type: values.type,
         message: "",
