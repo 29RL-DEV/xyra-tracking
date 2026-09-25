@@ -212,7 +212,9 @@ describe("staff shipments API", () => {
 
       expect(publicResponse.status).toBe(200);
       const body = await readJson<PublicTrackingResult>(publicResponse);
-      expect(body.events).toEqual([]);
+      // Creation is the first event the customer sees.
+      expect(body.events).toHaveLength(1);
+      expect(body.events[0]).toMatchObject({ type: "CREATED", location: VALID_SHIPMENT.originCity });
     });
   });
 

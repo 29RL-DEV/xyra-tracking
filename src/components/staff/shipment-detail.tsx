@@ -178,15 +178,15 @@ export function ShipmentDetailView({ detail }: { detail: StaffShipmentDetail }) 
           <Section titleId="details-heading" title="Shipment details">
             <Card as="div">
               <dl className="divide-y divide-line-strong/60 text-sm">
+                <DetailRow label="Service">
+                  {SERVICE_LEVEL_LABEL[shipment.serviceLevel] ?? shipment.serviceLevel}
+                </DetailRow>
                 <DetailRow label="Packages">{shipment.packageCount}</DetailRow>
                 <DetailRow label="Weight">
                   {shipment.weightKg !== null ? `${shipment.weightKg} kg` : "—"}
                 </DetailRow>
                 <DetailRow label="Customer reference">
                   {shipment.customerReference ?? "—"}
-                </DetailRow>
-                <DetailRow label="Created">
-                  <DateTime value={shipment.createdAt} />
                 </DetailRow>
               </dl>
             </Card>

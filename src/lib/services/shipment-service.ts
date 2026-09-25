@@ -331,6 +331,17 @@ async function insertShipment(
       auditEntries: {
         create: { action: "CREATED", staffUserId: staffUserId ?? null },
       },
+      // Creation is the first step of the journey, so it opens the timeline the
+      // customer sees, in the same statement as the shipment itself.
+      events: {
+        create: {
+          occurredAt: new Date(),
+          location: input.currentLocation ?? input.originCity,
+          type: "CREATED",
+          message: "Shipment details received. Awaiting collection.",
+          createdById: staffUserId ?? null,
+        },
+      },
     },
     select: staffShipmentSelect,
   });

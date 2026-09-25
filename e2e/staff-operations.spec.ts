@@ -101,7 +101,8 @@ test.describe("staff operations", () => {
 
     await page.goto(`/track/${trackingNumber}`);
     await expect(page.getByRole("heading", { name: trackingNumber })).toBeVisible();
-    await expect(page.getByText("No tracking updates yet")).toBeVisible();
+    // Creation opens the timeline the customer sees.
+    await expect(page.getByText("Shipment details received. Awaiting collection.").first()).toBeVisible();
   });
 
   test("adds a tracking event and the customer view reflects it", async ({ page }) => {
