@@ -139,6 +139,49 @@ describe("tracking events", () => {
       expect(badType.status).toBe(400);
     });
 
+    it("requires an explanation for the customer on a delay or an exception", async () => {
+      for (const type of ["DELAYED", "EXCEPTION"]) {
+        const response = await addEvent(
+          send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
+            location: "Gralebridge hub",
+            type,
+          }),
+          params({ id: fixtures.inTransitId }),
+        );
+
+        expect(response.status).toBe(400);
+        expect((await readJson<ErrorBody>(response)).error.fields?.message).toBe(
+          "Explain to the customer what has happened",
+        );
+      }
+
+      expect(
+        (await prisma.shipment.findUniqueOrThrow({ where: { id: fixtures.inTransitId } })).status,
+      ).toBe("IN_TRANSIT");
+    });
+
+    it("records a delay or an exception that is explained", async () => {
+      for (const [type, message] of [
+        ["DELAYED", "Held at the hub by a vehicle fault. We expect it to move tomorrow."],
+        ["EXCEPTION", "The delivery address is incomplete. We are holding the shipment."],
+      ] as const) {
+        const response = await addEvent(
+          send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
+            location: "Gralebridge hub",
+            type,
+            message,
+          }),
+          params({ id: fixtures.inTransitId }),
+        );
+
+        expect(response.status).toBe(201);
+        const after = await prisma.shipment.findUniqueOrThrow({
+          where: { id: fixtures.inTransitId },
+        });
+        expect(after.status).toBe(type);
+      }
+    });
+
     it("returns 404 for a shipment that does not exist", async () => {
       const response = await addEvent(
         send("/api/staff/shipments/nope/events", "POST", VALID_EVENT),
@@ -166,8 +209,8 @@ describe("tracking events", () => {
       expect(body.error.code).toBe("EVENT_IN_FUTURE");
     });
 
-    it("accepts a timestamp a couple of minutes ahead, allowing for clock skew", async () => {
-      const soon = new Date(Date.now() + 2 * 60_000).toISOString();
+    it("records a time a few minutes ahead as now, allowing for clock skew", async () => {
+      const soon = new Date(Date.now() + 4 * 60_000).toISOString();
 
       const response = await addEvent(
         send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
@@ -178,6 +221,39 @@ describe("tracking events", () => {
       );
 
       expect(response.status).toBe(201);
+      const { event } = await readJson<{ event: { occurredAt: string } }>(response);
+      expect(Date.parse(event.occurredAt)).toBeLessThanOrEqual(Date.now());
+    });
+
+    it("does not let an event dated a few minutes ahead hold up the delivery after it", async () => {
+      // Kept as sent, this would sort above a delivery recorded in the next few
+      // minutes, which would then be refused as not the latest update.
+      await addEvent(
+        send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
+          location: "Westmoor Quay delivery depot",
+          type: "OUT_FOR_DELIVERY",
+          occurredAt: new Date(Date.now() + 4 * 60_000).toISOString(),
+        }),
+        params({ id: fixtures.inTransitId }),
+      );
+
+      const delivered = await addEvent(
+        send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
+          location: "Westmoor Quay",
+          type: "DELIVERED",
+        }),
+        params({ id: fixtures.inTransitId }),
+      );
+
+      expect(delivered.status).toBe(201);
+      const body = await readJson<PublicTrackingResult>(
+        await publicTrack(
+          get("/api/shipments/TRK-TEST-001"),
+          params({ trackingNumber: "TRK-TEST-001" }),
+        ),
+      );
+      expect(body.shipment.status).toBe("DELIVERED");
+      expect(body.events[0]?.type).toBe("DELIVERED");
     });
 
     it("accepts a backdated event and sorts it into position", async () => {
@@ -327,6 +403,41 @@ describe("tracking events", () => {
         where: { id: fixtures.inTransitId },
       });
       expect(after.status).toBe("DELIVERED");
+    });
+
+    it("refuses a delivered event before the shipment is out for delivery", async () => {
+      const response = await addEvent(
+        send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", {
+          location: "Westmoor Quay",
+          type: "DELIVERED",
+        }),
+        params({ id: fixtures.inTransitId }),
+      );
+
+      expect(response.status).toBe(422);
+      expect((await readJson<ErrorBody>(response)).error.code).toBe("INVALID_STATUS_TRANSITION");
+    });
+
+    it("treats delivery as final: no later event is accepted", async () => {
+      for (const type of ["IN_TRANSIT", "EXCEPTION", "DELIVERED"]) {
+        const response = await addEvent(
+          send(`/api/staff/shipments/${fixtures.deliveredId}/events`, "POST", {
+            location: "Redhaven",
+            type,
+            message: "Reported by the customer after delivery.",
+          }),
+          params({ id: fixtures.deliveredId }),
+        );
+
+        expect(response.status).toBe(422);
+        expect((await readJson<ErrorBody>(response)).error.code).toBe("INVALID_STATUS_TRANSITION");
+      }
+
+      const latest = await prisma.trackingEvent.findFirstOrThrow({
+        where: { shipmentId: fixtures.deliveredId },
+        orderBy: { occurredAt: "desc" },
+      });
+      expect(latest.type).toBe("DELIVERED");
     });
 
     it("rejects a back-dated delivered event and writes nothing", async () => {

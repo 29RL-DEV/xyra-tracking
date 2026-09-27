@@ -61,18 +61,19 @@ One thing I paid particular attention to is keeping public and staff data separa
 
 ## Business rules
 
-- Status changes only through tracking events. The newest event sets the shipment's status and location; there is no separate status control.
+- Status changes only through tracking events. The newest event sets the shipment's status and location; there is no separate status control, and the API rejects a status sent with a shipment edit.
 - Shipments move through the defined lifecycle: Created → Collected → In transit → Out for delivery → Delivered. Events can also record Delayed or Exception states without skipping the normal lifecycle.
 - Earlier-dated events can be added to history but cannot move the shipment backwards. Invalid transitions are rejected by the server with 422.
 - Delivered is final, and a shipment cannot be marked Delivered without a matching latest Delivered event.
-- Customer messages are optional for normal events and required for Delayed and Exception events. Future-dated events are rejected.
+- Customer messages are optional for normal events and required for Delayed and Exception events. Future-dated events are rejected. A time up to five minutes ahead is treated as clock skew and recorded as now, so it can't hold up the next event.
+- Every write to a shipment locks its row first, so two events sent at the same moment are checked one after the other and can't both get past the rules.
 - The original ETA is preserved when it changes, and tracking numbers cannot be changed after creation.
 
 ## Security
 
-- Passwords are hashed with bcrypt. The session is a signed token in an `httpOnly` cookie that expires after 8 hours.
+- Passwords are hashed with bcrypt. The session is a signed token in an `httpOnly` cookie that expires after 8 hours. If the staff account behind a session is deleted, the API and the staff pages both refuse it.
 - Sign-in, tracking lookups and enquiries are rate limited.
-- Zod validates every endpoint on the server. Prisma queries are parameterised.
+- Zod validates every endpoint on the server. Endpoints that take a body only accept `Content-Type: application/json`. Prisma queries are parameterised.
 - Security headers are set, including a Content Security Policy.
 
 ## Run it locally
@@ -126,6 +127,8 @@ Migrations and seeding are run separately from your machine, not on deploy. The 
 - Staff accounts are only created by the seed (two, with the same single role). There's no registration or password change.
 - Staff can't reply to an enquiry from the app. It collects no contact details, as the brief asks, so there is nowhere to send an answer. Staff mark an enquiry resolved or reopen it, and leave an internal note on the shipment.
 - Only enquiries can be deleted. Shipments, events and notes can't.
+- Weight and package count are only capped at what the database columns hold, and the estimated delivery date isn't checked against today, since an overdue shipment keeps its date. The brief sets no business limits for these, so I didn't make any up.
+- Current location can be edited directly, even after delivery, because the brief lists it as an editable detail. A later tracking event, if there is one, replaces it.
 - Tracking numbers follow on from each other, so someone could guess a neighbouring one. Lookups are rate limited and the public page shows no personal data, but a real carrier would use random numbers.
 
 With more time I'd add a shared rate limiter, server-side session revocation, an automated accessibility check, and a way for staff to answer an enquiry, for example a reply shown on the tracking page next to the customer's reference.

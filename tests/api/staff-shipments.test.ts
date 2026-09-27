@@ -99,6 +99,20 @@ describe("staff shipments API", () => {
       expect(body.shipments[0]?.trackingNumber).toBe("TRK-TEST-002");
     });
 
+    it("searches for what was typed, treating % and _ as ordinary characters", async () => {
+      // Unescaped, each of these is a LIKE wildcard: % and _ alone match every
+      // shipment, and TEST_001 matches TRK-TEST-001.
+      for (const q of ["%", "_", "TRK%001", "TEST_001", "\\"]) {
+        const response = await list(get(`/api/staff/shipments?q=${encodeURIComponent(q)}`));
+
+        expect(response.status).toBe(200);
+        expect((await readJson<{ total: number }>(response)).total).toBe(0);
+      }
+
+      const exact = await list(get("/api/staff/shipments?q=TEST-001"));
+      expect((await readJson<{ total: number }>(exact)).total).toBe(1);
+    });
+
     it("returns an empty list rather than an error when nothing matches", async () => {
       const response = await list(get("/api/staff/shipments?q=NOTHINGMATCHES"));
 
@@ -197,6 +211,34 @@ describe("staff shipments API", () => {
       );
 
       expect(response.status).toBe(400);
+    });
+
+    it("answers a weight or package count too large for the database with a 400, not a failed insert", async () => {
+      for (const oversized of [
+        { weightKg: 1_000_000 },
+        { weightKg: "999999.995" },
+        { packageCount: 2_147_483_648 },
+        { packageCount: "3000000000" },
+      ]) {
+        const response = await create(
+          send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, ...oversized }),
+        );
+
+        expect(response.status).toBe(400);
+        const body = await readJson<ErrorBody>(response);
+        expect(Object.keys(body.error.fields ?? {})).toEqual(Object.keys(oversized));
+      }
+      expect(await prisma.shipment.count()).toBe(5);
+
+      // The largest values the columns hold are still accepted.
+      const largest = await create(
+        send("/api/staff/shipments", "POST", {
+          ...VALID_SHIPMENT,
+          weightKg: 999_999.99,
+          packageCount: 2_147_483_647,
+        }),
+      );
+      expect(largest.status).toBe(201);
     });
 
     it("makes a new shipment immediately trackable by the public endpoint", async () => {
@@ -331,21 +373,49 @@ describe("staff shipments API", () => {
       expect(body.error.code).toBe("IMMUTABLE_FIELD");
     });
 
-    it("rejects an invalid status", async () => {
-      const response = await update(
-        send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
-          status: "TELEPORTED",
-        }),
-        params({ id: fixtures.inTransitId }),
-      );
+    it("refuses a status change, which only a tracking event can make, and writes nothing", async () => {
+      // Delayed and Exception included: through a tracking event they need an
+      // explanation for the customer, so an edit must not be a way around it.
+      for (const status of ["DELAYED", "EXCEPTION", "OUT_FOR_DELIVERY", "DELIVERED", "TELEPORTED"]) {
+        const response = await update(
+          send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", { status }),
+          params({ id: fixtures.inTransitId }),
+        );
 
-      expect(response.status).toBe(400);
+        expect(response.status).toBe(400);
+        expect((await readJson<ErrorBody>(response)).error.fields?.status).toBeDefined();
+      }
+
+      const after = await prisma.shipment.findUniqueOrThrow({
+        where: { id: fixtures.inTransitId },
+      });
+      expect(after.status).toBe("IN_TRANSIT");
+      expect(
+        await prisma.trackingEvent.count({ where: { shipmentId: fixtures.inTransitId } }),
+      ).toBe(2);
+      expect(
+        await prisma.shipmentAuditEntry.count({ where: { shipmentId: fixtures.inTransitId } }),
+      ).toBe(0);
     });
 
-    it("reflects a status change on the public endpoint immediately", async () => {
+    it("rejects an oversized weight or package count on an edit too", async () => {
+      for (const oversized of [{ weightKg: 1_000_000 }, { packageCount: 2_147_483_648 }]) {
+        const response = await update(
+          send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", oversized),
+          params({ id: fixtures.inTransitId }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(Object.keys((await readJson<ErrorBody>(response)).error.fields ?? {})).toEqual(
+          Object.keys(oversized),
+        );
+      }
+    });
+
+    it("reflects an edit on the public endpoint immediately", async () => {
       await update(
         send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
-          status: "OUT_FOR_DELIVERY",
+          currentLocation: "Thornbeck depot",
         }),
         params({ id: fixtures.inTransitId }),
       );
@@ -357,38 +427,7 @@ describe("staff shipments API", () => {
         ),
       );
 
-      expect(body.shipment.status).toBe("OUT_FOR_DELIVERY");
-    });
-
-    it("refuses to mark a shipment delivered when it has no delivered event", async () => {
-      // Out for delivery may move on to Delivered, so it is the delivered guard
-      // that answers here, not the journey rule.
-      await prisma.shipment.update({
-        where: { id: fixtures.inTransitId },
-        data: { status: "OUT_FOR_DELIVERY" },
-      });
-
-      const response = await update(
-        send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
-          status: "DELIVERED",
-        }),
-        params({ id: fixtures.inTransitId }),
-      );
-
-      expect(response.status).toBe(422);
-      const body = await readJson<ErrorBody>(response);
-      expect(body.error.code).toBe("DELIVERED_REQUIRES_EVENT");
-    });
-
-    it("allows delivered when a delivered event already exists", async () => {
-      const response = await update(
-        send(`/api/staff/shipments/${fixtures.deliveredId}`, "PATCH", {
-          status: "DELIVERED",
-        }),
-        params({ id: fixtures.deliveredId }),
-      );
-
-      expect(response.status).toBe(200);
+      expect(body.shipment.currentLocation).toBe("Thornbeck depot");
     });
   });
 });

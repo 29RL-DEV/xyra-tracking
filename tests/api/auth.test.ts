@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { POST as login } from "@/app/api/auth/login/route";
 import { POST as logout } from "@/app/api/auth/logout/route";
@@ -109,6 +110,32 @@ describe("staff authentication", () => {
 
     // Identical body: the response must not confirm which addresses exist.
     expect(b).toEqual(a);
+  });
+
+  it("refuses credentials not sent as JSON, so a form on another site cannot sign anyone in", async () => {
+    const credentials = JSON.stringify({
+      email: TEST_STAFF.email,
+      password: TEST_STAFF.password,
+    });
+    const post = (contentType: string) =>
+      login(
+        new NextRequest(new URL("/api/auth/login", "http://localhost:3000"), {
+          method: "POST",
+          headers: { "Content-Type": contentType },
+          body: credentials,
+        }),
+      );
+
+    // What a cross-site HTML form can send.
+    for (const contentType of ["text/plain", "application/x-www-form-urlencoded"]) {
+      const response = await post(contentType);
+
+      expect(response.status).toBe(415);
+      expect((await readJson<ErrorBody>(response)).error.code).toBe("UNSUPPORTED_MEDIA_TYPE");
+      expect(getTestCookie(SESSION_COOKIE)).toBeUndefined();
+    }
+
+    expect((await post("application/json; charset=utf-8")).status).toBe(200);
   });
 
   it("rejects an empty body with field-level errors", async () => {

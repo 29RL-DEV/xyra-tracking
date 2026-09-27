@@ -11,9 +11,13 @@ import {
 } from "@/lib/domain/tracking-number";
 import { dateOnly, optionalText, pageNumber, text } from "./common";
 
-const statusEnum = z.enum(SHIPMENT_STATUSES, {
-  errorMap: () => ({ message: "Choose one of the supported statuses" }),
-});
+/**
+ * The largest values the database columns hold: weight is a decimal with six
+ * digits before the point, and the package count a 32-bit integer. Checked
+ * here so a larger value is a validation error, never a failed insert.
+ */
+export const MAX_WEIGHT_KG = 999_999.99;
+export const MAX_PACKAGE_COUNT = 2_147_483_647;
 
 const weightKg = z
   .union([z.number(), z.string()])
@@ -24,6 +28,9 @@ const weightKg = z
   })
   .refine((value) => value === undefined || (Number.isFinite(value) && value > 0), {
     message: "Weight must be a positive number",
+  })
+  .refine((value) => value === undefined || value <= MAX_WEIGHT_KG, {
+    message: "Weight must be 999,999.99 kg or less",
   });
 
 const packageCount = z
@@ -33,6 +40,9 @@ const packageCount = z
   .transform((value) => (typeof value === "string" ? Number(value) : value))
   .refine((value) => Number.isInteger(value) && value >= 1, {
     message: "Enter at least one package",
+  })
+  .refine((value) => value <= MAX_PACKAGE_COUNT, {
+    message: "That is more packages than a shipment can record",
   });
 
 /**
@@ -78,13 +88,13 @@ export type CreateShipmentInput = z.infer<typeof createShipmentSchema>;
 
 /**
  * Partial by design: a field that is not supplied keeps its previous value and
- * is never nulled. `trackingNumber` is absent because it is immutable — the
- * route rejects it explicitly so the caller gets an explanation rather than an
+ * is never nulled. `trackingNumber` is absent because it is immutable, and
+ * `status` because it only changes through tracking events. The route rejects
+ * both explicitly, so the caller gets an explanation rather than an
  * "unrecognised key" error.
  */
 export const updateShipmentSchema = z
   .object({
-    status: statusEnum,
     originCity: text("Origin city", 1, 80),
     originCountry: text("Origin country", 1, 56),
     destinationCity: text("Destination city", 1, 80),

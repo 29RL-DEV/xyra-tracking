@@ -1,8 +1,22 @@
 import type { NextRequest } from "next/server";
 import { errors } from "./errors";
 
-/** Malformed JSON is a client error, not a crash. */
+/**
+ * Reads a JSON request body. Malformed JSON is a client error, not a crash.
+ *
+ * The body must be declared as JSON. An HTML form on another site can only
+ * send form encodings or text/plain, and a script there cannot send
+ * application/json to this origin without a CORS preflight, which is refused.
+ * So no other site can post to these endpoints, including sign-in, which has no
+ * session cookie to protect it.
+ */
 export async function parseJsonBody(request: Request): Promise<unknown> {
+  const mediaType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+
+  if (mediaType !== "application/json") {
+    throw errors.unsupportedMediaType();
+  }
+
   try {
     return await request.json();
   } catch {

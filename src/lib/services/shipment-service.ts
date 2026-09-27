@@ -1,11 +1,7 @@
 import { Prisma, type ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { errors } from "@/lib/api/errors";
-import {
-  ATTENTION_STATUSES,
-  NEEDS_ATTENTION_FILTER,
-  STATUS_LABEL,
-} from "@/lib/domain/status";
+import { ATTENTION_STATUSES, NEEDS_ATTENTION_FILTER } from "@/lib/domain/status";
 import { EVENT_ORDER_BY } from "@/lib/domain/ordering";
 import {
   nextTrackingNumber,
@@ -25,7 +21,7 @@ import {
 } from "@/lib/dto/shipment";
 import { toPublicEvent, toStaffEvent } from "@/lib/dto/event";
 import { diffShipment, recordShipmentChange } from "./shipment-audit";
-import { assertCanMoveTo } from "./status-transition";
+import { lockShipment } from "./shipment-lock";
 import type {
   CreateShipmentInput,
   ShipmentQuery,
@@ -134,7 +130,7 @@ export async function listShipments(
   if (query.q) {
     // Partial, case-insensitive: operators rarely have the full number to hand.
     // Bound as a parameter by the ORM, never concatenated into SQL.
-    where.trackingNumber = { contains: query.q, mode: "insensitive" };
+    where.trackingNumber = { contains: escapeLikePattern(query.q), mode: "insensitive" };
   }
 
   const page = Math.max(1, query.page);
@@ -156,6 +152,15 @@ export async function listShipments(
     page,
     pageSize: PAGE_SIZE,
   };
+}
+
+/**
+ * `contains` becomes a LIKE pattern, in which `%` and `_` are wildcards and a
+ * backslash escapes. Escaping all three makes the search match what was typed,
+ * so `%` finds nothing rather than every shipment.
+ */
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
 /**
@@ -350,39 +355,6 @@ async function insertShipment(
 }
 
 /**
- * The subset of the client these guards need, so they can run either on their
- * own or inside a caller transaction.
- */
-type DbClient = Pick<typeof prisma, "trackingEvent">;
-
-async function hasDeliveredEvent(
-  shipmentId: string,
-  db: DbClient = prisma,
-): Promise<boolean> {
-  const count = await db.trackingEvent.count({
-    where: { shipmentId, type: "DELIVERED" },
-  });
-
-  return count > 0;
-}
-
-/**
- * The brief requires that a delivered shipment has a believable delivered
- * event. Enforcing it here makes the inconsistent state unreachable through the
- * application rather than merely discouraged.
- */
-export async function assertDeliveredHasEvent(
-  shipmentId: string,
-  nextStatus: ShipmentStatus,
-  db: DbClient = prisma,
-): Promise<void> {
-  if (nextStatus !== "DELIVERED") return;
-  if (await hasDeliveredEvent(shipmentId, db)) return;
-
-  throw errors.deliveredRequiresEvent();
-}
-
-/**
  * Translates a validated partial update into the columns to write.
  *
  * A field that was not supplied is left out entirely, so it keeps its previous
@@ -395,7 +367,6 @@ function buildShipmentUpdate(
 ): Prisma.ShipmentUpdateInput {
   const data: Prisma.ShipmentUpdateInput = {};
 
-  if (input.status !== undefined) data.status = input.status;
   if (input.originCity !== undefined) data.originCity = input.originCity;
   if (input.originCountry !== undefined) data.originCountry = input.originCountry;
   if (input.destinationCity !== undefined) data.destinationCity = input.destinationCity;
@@ -430,14 +401,15 @@ function buildShipmentUpdate(
 }
 
 /**
- * Applies a partial update.
+ * Applies a partial update to a shipment's own details.
  *
- * The read, the delivered-event guard and the write share one transaction, so a
- * rejected update writes nothing. It does not lock the row: at the default READ
- * COMMITTED isolation, two concurrent edits to one field resolve as last write
- * wins. Both decisions taken from the read tolerate that — concurrent writers
- * capture the same original ETA, and permission to mark a shipment delivered
- * cannot be invalidated afterwards, because events are never deleted.
+ * The status is not one of them: it only changes through tracking events,
+ * which apply the journey rules and give the customer the reason.
+ *
+ * The read and the write share one transaction, which starts by locking the
+ * shipment's row, the same lock an event takes. Concurrent edits therefore
+ * apply one after the other: each audit entry records the value it actually
+ * replaced, and the original ETA is captured from the first change only.
  */
 export async function updateShipment(
   id: string,
@@ -446,23 +418,12 @@ export async function updateShipment(
   staffUserId?: string,
 ) {
   return prisma.$transaction(async (tx) => {
-    const existing = await tx.shipment.findUnique({
+    await lockShipment(tx, id);
+
+    const existing = await tx.shipment.findUniqueOrThrow({
       where: { id },
       select: staffShipmentSelect,
     });
-
-    if (!existing) {
-      throw errors.shipmentNotFound();
-    }
-
-    if (input.status) {
-      // Only a real change has to follow the journey. The staff screens change
-      // status through events; this keeps the API under the same rules.
-      if (input.status !== existing.status) {
-        await assertCanMoveTo(tx, id, "status", existing.status, input.status);
-      }
-      await assertDeliveredHasEvent(id, input.status, tx);
-    }
 
     const updated = await tx.shipment.update({
       where: { id },
@@ -476,30 +437,6 @@ export async function updateShipment(
       changes: diffShipment(existing, updated),
       staffUserId: staffUserId ?? null,
     });
-
-    // A status change leaves a row in the timeline, so the customer's latest
-    // update never contradicts the status above it. Skipped when the latest
-    // event already says the same thing.
-    if (input.status && input.status !== existing.status) {
-      const latest = await tx.trackingEvent.findFirst({
-        where: { shipmentId: id },
-        orderBy: [...EVENT_ORDER_BY],
-        select: { type: true },
-      });
-
-      if (latest?.type !== input.status) {
-        await tx.trackingEvent.create({
-          data: {
-            shipmentId: id,
-            occurredAt: new Date(),
-            location: updated.currentLocation ?? updated.originCity,
-            type: input.status,
-            message: `Shipment status changed to ${STATUS_LABEL[input.status]}.`,
-            createdById: staffUserId ?? null,
-          },
-        });
-      }
-    }
 
     return toStaffShipment(updated);
   });

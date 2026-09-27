@@ -18,6 +18,7 @@ import {
   TRACKING_DIGITS_PATTERN,
   TRACKING_NUMBER_PREFIX,
 } from "@/lib/domain/tracking-number";
+import { MAX_PACKAGE_COUNT } from "@/lib/validation/shipment";
 import { Alert } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -48,7 +49,11 @@ const formSchema = z.object({
   currentLocation: z.string().trim(),
   serviceLevel: z.enum(SERVICE_LEVELS),
   shipmentType: z.string(),
-  packageCount: z.coerce.number().int().min(1, "Enter at least one package"),
+  packageCount: z.coerce
+    .number()
+    .int()
+    .min(1, "Enter at least one package")
+    .max(MAX_PACKAGE_COUNT, "That is more packages than a shipment can record"),
   weightKg: z.string().trim(),
   customerReference: z.string().trim(),
 });

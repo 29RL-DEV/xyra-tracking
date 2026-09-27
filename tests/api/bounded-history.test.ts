@@ -103,16 +103,13 @@ describe("atomic shipment updates", () => {
     await signIn(fixtures.staffId);
   });
 
-  it("writes nothing when the delivered guard rejects part of an update", async () => {
-    // Out for delivery may move on to Delivered, so it is the delivered guard
-    // that refuses below, not the journey rule.
-    const before = await prisma.shipment.update({
+  it("writes nothing when part of an update is refused", async () => {
+    const before = await prisma.shipment.findUniqueOrThrow({
       where: { id: fixtures.inTransitId },
-      data: { status: "OUT_FOR_DELIVERY" },
     });
 
-    // A status the guard refuses, bundled with an ETA and location change that
-    // would be valid on their own.
+    // A status, which only tracking events may change, bundled with an ETA and
+    // location change that would be valid on their own.
     const response = await patchShipment(
       send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
         status: "DELIVERED",
@@ -122,8 +119,8 @@ describe("atomic shipment updates", () => {
       params({ id: fixtures.inTransitId }),
     );
 
-    expect(response.status).toBe(422);
-    expect((await readJson<ErrorBody>(response)).error.code).toBe("DELIVERED_REQUIRES_EVENT");
+    expect(response.status).toBe(400);
+    expect((await readJson<ErrorBody>(response)).error.fields?.status).toBeDefined();
 
     const after = await prisma.shipment.findUniqueOrThrow({
       where: { id: fixtures.inTransitId },

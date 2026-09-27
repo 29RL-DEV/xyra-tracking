@@ -5,12 +5,15 @@ import { toStaffEvent, type StaffEvent } from "@/lib/dto/event";
 import type { AuditChanges } from "@/lib/dto/shipment";
 import type { CreateEventInput } from "@/lib/validation/event";
 import { recordShipmentChange } from "./shipment-audit";
+import { lockShipment } from "./shipment-lock";
 import { assertCanMoveTo } from "./status-transition";
 
 /**
  * Tolerance for clock skew between an operator's browser and the server. A
  * tracking event asserts something that already happened, so anything beyond
- * this is rejected rather than allowed to sort above genuine latest events.
+ * this is rejected. A time within it is recorded as the present moment: kept
+ * as sent, it would sort above every event recorded over the next few minutes,
+ * and a delivery added in that window would be refused as not the latest.
  */
 export const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
@@ -44,35 +47,27 @@ export interface AddEventResult {
  *
  * A delivered event must be the latest update: delivery is the end of the
  * journey, and a timeline that continues after it would contradict itself.
+ * This is also the only place a shipment becomes delivered, in the same
+ * transaction that records its delivered event, so one never exists without
+ * the other.
  *
- * The latest-event read, the insert and the shipment update share one
- * transaction, so the event is never recorded without the state it carries.
+ * The checks, the insert and the shipment update share one transaction, which
+ * starts by locking the shipment's row. Two events sent at the same moment are
+ * therefore checked one after the other, the second against the state the
+ * first left, and the event is never recorded without the state it carries.
  */
 export async function addEvent(
   shipmentId: string,
   input: CreateEventInput,
   staffUserId: string,
-  now: Date = new Date(),
 ): Promise<AddEventResult> {
-  const shipment = await prisma.shipment.findUnique({
-    where: { id: shipmentId },
-    select: { id: true },
-  });
-
-  if (!shipment) {
-    throw errors.shipmentNotFound();
-  }
-
-  const occurredAt = input.occurredAt ?? now;
-
-  if (occurredAt.getTime() > now.getTime() + FUTURE_TOLERANCE_MS) {
-    throw errors.eventInFuture();
-  }
-
-  // The shipment's delivered guard is satisfied here by construction: a
-  // DELIVERED event that becomes the latest update is created in the same
-  // transaction that marks the shipment delivered.
   const result = await prisma.$transaction(async (tx) => {
+    await lockShipment(tx, shipmentId);
+
+    // Read once the lock is held, so events recorded as happening now are
+    // dated in the order they are applied.
+    const occurredAt = eventTime(input.occurredAt, new Date());
+
     const latest = await tx.trackingEvent.findFirst({
       where: { shipmentId },
       orderBy: [{ occurredAt: "desc" }],
@@ -174,4 +169,19 @@ export async function addEvent(
     event: toStaffEvent(result.event),
     shipmentUpdated: result.becomesLatest,
   };
+}
+
+/**
+ * When an event happened: the time the operator gave, or now when they gave
+ * none. A time slightly ahead of the server's clock is recorded as now, and one
+ * further ahead is refused. See FUTURE_TOLERANCE_MS.
+ */
+function eventTime(requested: Date | undefined, now: Date): Date {
+  if (!requested) return now;
+
+  if (requested.getTime() > now.getTime() + FUTURE_TOLERANCE_MS) {
+    throw errors.eventInFuture();
+  }
+
+  return requested.getTime() > now.getTime() ? now : requested;
 }

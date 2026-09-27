@@ -61,9 +61,9 @@ export async function verifySession(token: string): Promise<SessionResult> {
 export const sessionCookieOptions = {
   httpOnly: true,
   secure: isProduction,
-  // Lax is what keeps a cross-site form from carrying the session into the
-  // staff API, which parses JSON bodies without checking Content-Type. Strict
-  // would also drop the cookie when someone follows a link into /staff.
+  // Lax keeps a cross-site form from carrying the session into the staff API,
+  // alongside the API's refusal of any body not sent as JSON. Strict would
+  // also drop the cookie when someone follows a link into /staff.
   sameSite: "lax",
   path: "/",
 } as const;

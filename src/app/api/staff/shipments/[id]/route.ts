@@ -28,13 +28,17 @@ export const PATCH = handleRoute(async (request: NextRequest, context: Context) 
   const { id } = await context.params;
   const body = await parseJsonBody(request);
 
-  // Explicit rejection, so the caller gets an explanation rather than an
+  // Explicit rejections, so the caller gets an explanation rather than an
   // "unrecognised key" error from the schema.
   if (body && typeof body === "object" && "trackingNumber" in body) {
     throw errors.immutableField(
       "trackingNumber",
       "A tracking number cannot be changed after a shipment is created. Customers may already be using it.",
     );
+  }
+
+  if (body && typeof body === "object" && "status" in body) {
+    throw errors.statusFollowsEvents();
   }
 
   const input = updateShipmentSchema.parse(body);

@@ -31,8 +31,13 @@ function describeError(error: unknown): Record<string, string> {
 
   const isDatabaseError = error.name.startsWith("PrismaClient");
   const code = (error as { code?: unknown }).code;
-  // The first line of a stack repeats the message, so it is dropped with it.
-  const frames = error.stack?.split("\n").slice(1).join("\n");
+  // Only the call frames. A stack starts by repeating the message, and a
+  // Prisma message runs over several lines, so dropping just the first line
+  // would still log the rest of it.
+  const frames = error.stack
+    ?.split("\n")
+    .filter((line) => /^\s+at /.test(line))
+    .join("\n");
 
   return {
     name: error.name,

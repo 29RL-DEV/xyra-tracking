@@ -13,7 +13,6 @@ export type ErrorCode =
   | "TRACKING_NUMBER_TAKEN"
   | "INVALID_STATUS"
   | "EVENT_IN_FUTURE"
-  | "DELIVERED_REQUIRES_EVENT"
   | "DELIVERED_EVENT_NOT_LATEST"
   | "INVALID_STATUS_TRANSITION"
   | "EVENT_OUT_OF_ORDER"
@@ -22,6 +21,7 @@ export type ErrorCode =
   | "SESSION_EXPIRED"
   | "RATE_LIMITED"
   | "TOO_MANY_ATTEMPTS"
+  | "UNSUPPORTED_MEDIA_TYPE"
   | "INTERNAL_ERROR";
 
 export interface FieldErrors {
@@ -85,12 +85,12 @@ export const errors = {
       { occurredAt: "An event cannot be dated in the future." },
     ),
 
-  deliveredRequiresEvent: () =>
+  statusFollowsEvents: () =>
     new AppError(
-      "DELIVERED_REQUIRES_EVENT",
-      422,
-      "Add a delivered event before marking this shipment as delivered, so the customer can see when it arrived.",
-      { status: "This shipment has no delivered event yet." },
+      "VALIDATION_FAILED",
+      400,
+      "A shipment's status changes when a tracking event is added, so the customer is always told why.",
+      { status: "Add a tracking event to change the status." },
     ),
 
   deliveredEventNotLatest: () =>
@@ -156,6 +156,13 @@ export const errors = {
       "TOO_MANY_ATTEMPTS",
       429,
       "Too many sign-in attempts. Please wait a few minutes and try again.",
+    ),
+
+  unsupportedMediaType: () =>
+    new AppError(
+      "UNSUPPORTED_MEDIA_TYPE",
+      415,
+      "Send the request body as JSON, with Content-Type: application/json.",
     ),
 
   internal: () =>

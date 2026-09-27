@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireStaffPage } from "@/lib/auth/require-staff";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
-import { clearTestCookies, setTestCookie } from "../setup/test-env";
+import { prisma } from "@/lib/db";
+import { clearTestCookies, getTestCookie, setTestCookie } from "../setup/test-env";
 
 /**
  * `redirect()` throws in real Next.js so rendering stops; the mock does the
@@ -23,18 +24,56 @@ function redirectedTo(): string {
   return redirectMock.mock.calls[0]![0] as string;
 }
 
+const ACCOUNT_EMAIL = "page-guard@demo.test";
+
+/** A signed session for an account that exists in the database. */
+async function signInAsNewAccount(): Promise<string> {
+  const account = await prisma.staffUser.create({
+    data: { email: ACCOUNT_EMAIL, name: "Page Guard", passwordHash: "x" },
+  });
+  const token = await signSession({ userId: account.id, email: ACCOUNT_EMAIL, name: "Page Guard" });
+  setTestCookie(SESSION_COOKIE, token);
+
+  return account.id;
+}
+
 describe("requireStaffPage", () => {
   beforeEach(() => {
     clearTestCookies();
     redirectMock.mockClear();
   });
 
-  it("resolves without redirecting when the session is valid", async () => {
-    const token = await signSession({ userId: "x", email: "a@b.test", name: "A" });
-    setTestCookie(SESSION_COOKIE, token);
+  afterEach(async () => {
+    await prisma.staffUser.deleteMany({ where: { email: ACCOUNT_EMAIL } });
+  });
 
-    await expect(requireStaffPage("/staff")).resolves.toBeUndefined();
+  it("returns the session without redirecting when it is valid and its account exists", async () => {
+    await signInAsNewAccount();
+
+    await expect(requireStaffPage("/staff")).resolves.toMatchObject({ email: ACCOUNT_EMAIL });
     expect(redirectMock).not.toHaveBeenCalled();
+  });
+
+  it("sends a validly signed session whose account was deleted to have its cookie cleared", async () => {
+    const accountId = await signInAsNewAccount();
+    await prisma.staffUser.delete({ where: { id: accountId } });
+
+    // Rendering stops here, before the page reads any staff data.
+    await expect(requireStaffPage("/staff/shipments/abc")).rejects.toThrow();
+
+    // Not straight to sign-in: the cookie is still there, and middleware would
+    // send its valid signature from sign-in back into the staff area.
+    expect(redirectedTo()).toBe("/api/auth/session-ended?next=%2Fstaff%2Fshipments%2Fabc");
+    expect(getTestCookie(SESSION_COOKIE)).toBeTruthy();
+  });
+
+  it("sends the layout, which names no page, to the same place without a next path", async () => {
+    const accountId = await signInAsNewAccount();
+    await prisma.staffUser.delete({ where: { id: accountId } });
+
+    await expect(requireStaffPage()).rejects.toThrow();
+
+    expect(redirectedTo()).toBe("/api/auth/session-ended");
   });
 
   it("redirects to login with next set to the given path when there is no session", async () => {

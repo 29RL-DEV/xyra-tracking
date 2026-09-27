@@ -7,9 +7,12 @@ import { GET as getShipment, PATCH as patchShipment } from "@/app/api/staff/ship
 import { POST as addEvent } from "@/app/api/staff/shipments/[id]/events/route";
 import { GET as listShipments } from "@/app/api/staff/shipments/route";
 import { DELETE as deleteEnquiry } from "@/app/api/staff/enquiries/[id]/route";
+import { GET as sessionEnded } from "@/app/api/auth/session-ended/route";
 import { TRACKING_LOOKUP_RATE_LIMIT } from "@/lib/api/rate-limit";
 import { handleRoute } from "@/lib/api/respond";
+import { SESSION_ENDED_PATH } from "@/lib/auth/require-staff";
 import { SESSION_COOKIE } from "@/lib/auth/session";
+import { middleware } from "@/middleware";
 import { prisma } from "@/lib/db";
 import { enquiryReference } from "@/lib/domain/enquiry-reference";
 import type { StaffShipment, StaffShipmentDetail } from "@/lib/dto/shipment";
@@ -107,9 +110,11 @@ describe("audit trail", () => {
     });
   });
 
-  it("records a status change with its old and new value and the staff member", async () => {
+  it("records an edit with its old and new value and the staff member", async () => {
     await patchShipment(
-      send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", { status: "DELAYED" }),
+      send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
+        currentLocation: "Thornbeck depot",
+      }),
       params({ id: fixtures.inTransitId }),
     );
 
@@ -117,7 +122,7 @@ describe("audit trail", () => {
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({
       action: "UPDATED",
-      changes: { status: { from: "IN_TRANSIT", to: "DELAYED" } },
+      changes: { currentLocation: { from: "Gralebridge hub", to: "Thornbeck depot" } },
       staff: { name: TEST_STAFF.name },
     });
   });
@@ -127,7 +132,7 @@ describe("audit trail", () => {
 
     await patchShipment(
       send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
-        status: before.shipment.status,
+        packageCount: before.shipment.packageCount,
         currentLocation: before.shipment.currentLocation,
       }),
       params({ id: fixtures.inTransitId }),
@@ -136,7 +141,7 @@ describe("audit trail", () => {
 
     await patchShipment(
       send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
-        status: before.shipment.status,
+        packageCount: before.shipment.packageCount,
         estimatedDelivery: "2026-12-24",
       }),
       params({ id: fixtures.inTransitId }),
@@ -170,7 +175,9 @@ describe("audit trail", () => {
 
   it("never reaches the public tracking response", async () => {
     await patchShipment(
-      send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", { status: "DELAYED" }),
+      send(`/api/staff/shipments/${fixtures.inTransitId}`, "PATCH", {
+        currentLocation: "Thornbeck depot",
+      }),
       params({ id: fixtures.inTransitId }),
     );
 
@@ -235,6 +242,42 @@ describe("sessions for accounts that no longer exist", () => {
     expect((await readJson<ErrorBody>(response)).error.code).toBe("UNAUTHENTICATED");
     expect(getTestCookie(SESSION_COOKIE)).toBeUndefined();
   });
+
+  it("have their cookie cleared by the route a staff page sends them to, then reach sign-in", async () => {
+    const leaver = await prisma.staffUser.create({
+      data: { email: "leaver@demo.test", name: "Former Operator", passwordHash: "x" },
+    });
+    await signIn(leaver.id);
+    const token = getTestCookie(SESSION_COOKIE)!;
+    await prisma.staffUser.delete({ where: { id: leaver.id } });
+
+    const response = await sessionEnded(get(`${SESSION_ENDED_PATH}?next=%2Fstaff%2Fshipments%2Fabc`));
+    const login = new URL(response.headers.get("location")!);
+
+    expect(response.status).toBe(307);
+    expect(login.pathname).toBe("/staff/login");
+    expect(login.searchParams.get("next")).toBe("/staff/shipments/abc");
+    expect(login.searchParams.get("reason")).toBe("signed-out");
+    expect(getTestCookie(SESSION_COOKIE)).toBeUndefined();
+
+    // The cookie is what would loop: middleware checks only the signature, so
+    // it sends a signed token on from sign-in back into the staff area.
+    // Without it, the sign-in page renders.
+    const withStaleCookie = await middleware(
+      new NextRequest(login, { headers: { cookie: `${SESSION_COOKIE}=${token}` } }),
+    );
+    expect(new URL(withStaleCookie.headers.get("location")!).pathname).toBe("/staff");
+    expect((await middleware(new NextRequest(login))).headers.get("location")).toBeNull();
+  });
+
+  it("leaves a working session alone if that route is visited directly", async () => {
+    await signIn(fixtures.staffId);
+
+    const response = await sessionEnded(get(SESSION_ENDED_PATH));
+
+    expect(getTestCookie(SESSION_COOKIE)).toBeTruthy();
+    expect(new URL(response.headers.get("location")!).searchParams.get("reason")).toBeNull();
+  });
 });
 
 describe("unexpected-error logging", () => {
@@ -286,5 +329,25 @@ describe("unexpected-error logging", () => {
 
     expect(logged.join("\n")).not.toContain("CUSTOMER-TEXT-CANARY");
     expect(JSON.parse(logged[0]!).error.name).toBe("PrismaClientValidationError");
+  });
+
+  it("leaves out every line of a multi-line database error, and keeps the call frames", async () => {
+    const failing = handleRoute(async (_request: NextRequest): Promise<NextResponse> => {
+      // The shape Prisma uses: the message starts on its second line and
+      // quotes the failing query's values.
+      const error = new Error(
+        '\nInvalid `prisma.enquiry.create()` invocation:\n\n{\n  data: {\n    message: "CUSTOMER-TEXT-CANARY"\n  }\n}\n\nValue out of range for the type.',
+      );
+      error.name = "PrismaClientKnownRequestError";
+      throw error;
+    });
+
+    await failing(get("/api/example"));
+
+    const entry = JSON.parse(logged[0]!);
+    expect(logged.join("\n")).not.toContain("CUSTOMER-TEXT-CANARY");
+    expect(logged.join("\n")).not.toContain("prisma.enquiry.create");
+    expect(entry.error.name).toBe("PrismaClientKnownRequestError");
+    expect(entry.error.stack.split("\n").every((line: string) => /^\s+at /.test(line))).toBe(true);
   });
 });
