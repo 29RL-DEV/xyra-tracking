@@ -10,7 +10,7 @@ import {
 import { clientIdentifier, parseJsonBody } from "@/lib/api/request";
 import { handleRoute, jsonResponse } from "@/lib/api/respond";
 import { setSessionCookie, signSession } from "@/lib/auth/session";
-import { authenticate, AuthenticationError } from "@/lib/services/auth-service";
+import { authenticate, AuthenticationError, startSession } from "@/lib/services/auth-service";
 import { loginSchema } from "@/lib/validation/auth";
 
 export const dynamic = "force-dynamic";
@@ -66,7 +66,10 @@ export const POST = handleRoute(async (request: NextRequest) => {
   clearRateLimit(clientKey);
   clearRateLimit(identityKey);
 
-  const token = await signSession(session);
+  // The token names a recorded session, so signing out can end it on the
+  // server rather than only removing the cookie.
+  const sessionId = await startSession(session.userId);
+  const token = await signSession({ ...session, sessionId });
   await setSessionCookie(token);
 
   // The password hash is never selected into this response shape.

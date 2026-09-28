@@ -48,6 +48,15 @@ describe("GET /api/shipments/:trackingNumber", () => {
     expect(body.error.fields?.trackingNumber).toBeDefined();
   });
 
+  it("answers a number with a stray percent sign as malformed, not as a server error", async () => {
+    // What reaches the handler for /api/shipments/TRK%25E0 once Next.js has
+    // decoded the path: a "%" that is not a valid escape.
+    const response = await track("TRK%E0");
+
+    expect(response.status).toBe(400);
+    expect((await readJson<ErrorBody>(response)).error.code).toBe("VALIDATION_FAILED");
+  });
+
   it("orders events newest first and marks the latest one first in the list", async () => {
     const body = await readJson<PublicTrackingResult>(await track("TRK-TEST-001"));
 

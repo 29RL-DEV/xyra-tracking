@@ -11,7 +11,7 @@ export default function NewShipmentPage() {
       <PageHeader
         breadcrumbs={[{ label: "Shipments", href: "/staff/shipments" }, { label: "New shipment" }]}
         title="New shipment"
-        description="Create a shipment record. A tracking number is generated automatically unless you supply one."
+        description="Create a shipment record. A tracking number is generated automatically."
       />
       <ShipmentForm />
     </div>

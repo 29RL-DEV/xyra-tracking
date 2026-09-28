@@ -5,10 +5,6 @@ import {
   SHIPMENT_STATUSES,
   SHIPMENT_TYPES,
 } from "@/lib/domain/status";
-import {
-  NEW_TRACKING_NUMBER_PATTERN,
-  trackingNumberFromDigits,
-} from "@/lib/domain/tracking-number";
 import { dateOnly, optionalText, pageNumber, text } from "./common";
 
 /**
@@ -31,6 +27,11 @@ const weightKg = z
   })
   .refine((value) => value === undefined || value <= MAX_WEIGHT_KG, {
     message: "Weight must be 999,999.99 kg or less",
+  })
+  // The column keeps two decimal places. Anything finer would be rounded on
+  // the way in, and a positive weight below 0.005 kg would be stored as zero.
+  .refine((value) => value === undefined || Math.round(value * 100) / 100 === value, {
+    message: "Weight can have at most two decimal places",
   });
 
 const packageCount = z
@@ -47,22 +48,11 @@ const packageCount = z
 
 /**
  * `.strict()` is deliberate: an unexpected key is rejected rather than ignored,
- * so no unvalidated field can reach the ORM.
+ * so no unvalidated field can reach the ORM. `trackingNumber` is absent because
+ * it is always generated; the route rejects it explicitly with an explanation.
  */
 export const createShipmentSchema = z
   .object({
-    trackingNumber: z
-      .string()
-      .trim()
-      .transform((value) => value.toUpperCase())
-      .refine((value) => value === "" || NEW_TRACKING_NUMBER_PATTERN.test(value), {
-        message: "Use TRK-DEMO- followed by up to 6 digits, for example TRK-DEMO-006",
-      })
-      .optional()
-      .transform((value) => {
-        const digits = value ? NEW_TRACKING_NUMBER_PATTERN.exec(value)?.[1] : undefined;
-        return digits ? trackingNumberFromDigits(digits) : undefined;
-      }),
     // A new shipment always starts as Created. Every later status comes from
     // tracking events, so the journey rules apply from the very first step.
     status: z

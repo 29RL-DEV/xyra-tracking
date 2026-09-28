@@ -66,8 +66,32 @@ model StaffUser {
   events            TrackingEvent[]
   resolvedEnquiries Enquiry[]
   auditEntries      ShipmentAuditEntry[]
+  sessions          StaffSession[]
+  creationKeys      ShipmentCreationKey[]
 
   @@map("staff_users")
+}
+
+/// One sign-in. The session token names its row, and every staff request
+/// checks the row is still live, so signing out ends the session on the server
+/// rather than only removing the browser's copy of the token.
+model StaffSession {
+  /// Supplied by the application from a cryptographically secure source,
+  /// never defaulted here, so no insert can fall back to a weaker generator.
+  id          String    @id
+  /// Cascade: a session cannot outlive its account, so finding a live row also
+  /// proves the account still exists.
+  staffUserId String
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  /// Set when the person signs out. Other sessions of the same account are
+  /// left alone.
+  revokedAt   DateTime?
+
+  staffUser StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@index([staffUserId])
+  @@map("staff_sessions")
 }
 
 /// The core record. Carries everything the customer sees and everything staff manage.
@@ -101,6 +125,7 @@ model Shipment {
   notes        InternalNote[]
   enquiries    Enquiry[]
   auditEntries ShipmentAuditEntry[]
+  creationKeys ShipmentCreationKey[]
 
   @@index([status])
   @@index([updatedAt])
@@ -186,4 +211,47 @@ model ShipmentAuditEntry {
 
   @@index([shipmentId, createdAt])
   @@map("shipment_audit_entries")
+}
+
+/// Which shipment a staff member's Idempotency-Key created, so a create that
+/// is retried — a double submit, or a resend after a lost response — returns
+/// that shipment instead of making a second one. Kept for 24 hours: older rows
+/// are deleted whenever a new key is stored, after which the key is free again.
+model ShipmentCreationKey {
+  id          String   @id @default(cuid())
+  /// Keys are per staff member, so two people who happen to choose the same
+  /// key never receive each other's shipment.
+  staffUserId String
+  key         String
+  /// SHA-256 of the validated create input. The same key sent with different
+  /// details is refused rather than answered with a shipment that does not
+  /// match them.
+  requestHash String
+  shipmentId  String
+  createdAt   DateTime @default(now())
+
+  staffUser StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+  shipment  Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@unique([staffUserId, key])
+  // Serves the deletion of expired keys.
+  @@index([createdAt])
+  @@map("shipment_creation_keys")
+}
+
+/// One rate-limit counter for one fixed window, shared by every application
+/// instance. Written only through the single upsert in
+/// src/lib/services/shared-rate-limit.ts, which also deletes rows long after
+/// their window has ended.
+model RateLimitCounter {
+  /// What is being counted, such as one client address sending enquiries.
+  key         String
+  /// Start of the window, aligned to the database clock and stored as UTC.
+  windowStart DateTime
+  count       Int
+
+  @@id([key, windowStart])
+  // Serves the sweep that deletes old windows.
+  @@index([windowStart])
+  @@map("rate_limit_counters")
 }

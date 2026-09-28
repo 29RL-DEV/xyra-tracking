@@ -1,9 +1,12 @@
 import type { ShipmentStatus } from "@prisma/client";
 import { beforeEach, describe, expect, it } from "vitest";
 import { POST as addEvent } from "@/app/api/staff/shipments/[id]/events/route";
+import { POST as createShipmentRoute } from "@/app/api/staff/shipments/route";
 import { PATCH as patchShipment } from "@/app/api/staff/shipments/[id]/route";
 import { prisma } from "@/lib/db";
 import { EVENT_ORDER_BY } from "@/lib/domain/ordering";
+import { GENERATED_TRACKING_NUMBER_PATTERN } from "@/lib/domain/tracking-number";
+import { allowedNextStatuses, journeyStep } from "@/lib/domain/status";
 import { params, readJson, send, type ErrorBody } from "../helpers/request";
 import { resetDatabase, seedFixtures, signIn } from "../helpers/fixtures";
 
@@ -15,6 +18,15 @@ import { resetDatabase, seedFixtures, signIn } from "../helpers/fixtures";
 const ROUNDS = 10;
 
 const ORIGINAL_ETA = "2030-01-01";
+
+const NEW_SHIPMENT = {
+  originCity: "Pelforth",
+  originCountry: "United Kingdom",
+  destinationCity: "Redhaven",
+  destinationCountry: "United Kingdom",
+  estimatedDelivery: ORIGINAL_ETA,
+  packageCount: 1,
+};
 
 let created = 0;
 
@@ -50,7 +62,10 @@ async function shipmentAt(step: "IN_TRANSIT" | "OUT_FOR_DELIVERY"): Promise<stri
   return shipment.id;
 }
 
-function postEvent(id: string, event: { type: ShipmentStatus; message?: string }) {
+function postEvent(
+  id: string,
+  event: { type: ShipmentStatus; message?: string; occurredAt?: string },
+) {
   return addEvent(
     send(`/api/staff/shipments/${id}/events`, "POST", { location: "Westmoor Quay", ...event }),
     params({ id }),
@@ -165,6 +180,65 @@ describe("concurrent writes to one shipment", () => {
       expect(responses.map((response) => response.status)).toEqual([201, 201]);
       expectConsistent(await stateOf(id));
     }
+  });
+
+  it("accepts only one of two events that are each valid alone but not together", async () => {
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const id = await shipmentAt("IN_TRANSIT");
+      expect(
+        (await postEvent(id, { type: "DELAYED", message: "Held at the hub by a vehicle fault." })).status,
+      ).toBe(201);
+
+      // After the delay the shipment can carry on in transit, and the history
+      // can take the delivery round the delay happened on — but a journey that
+      // was out for delivery cannot then go back into transit.
+      const responses = await Promise.all([
+        postEvent(id, {
+          type: "OUT_FOR_DELIVERY",
+          occurredAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+        }),
+        postEvent(id, { type: "IN_TRANSIT" }),
+      ]);
+      const state = await stateOf(id);
+      const oldestFirst = [...state.timeline].reverse();
+
+      expect(responses.map((response) => response.status).sort()).toEqual([201, 422]);
+      expect(
+        oldestFirst.every(
+          (type, index) =>
+            index === 0 ||
+            allowedNextStatuses(
+              oldestFirst[index - 1]!,
+              journeyStep(oldestFirst.slice(0, index).reverse()),
+            ).includes(type),
+        ),
+      ).toBe(true);
+      expectConsistent(state);
+    }
+  });
+
+  it("gives every shipment created at the same moment its own random number", async () => {
+    const CREATES = 30;
+    const before = await prisma.shipment.count();
+
+    const responses = await Promise.all(
+      Array.from({ length: CREATES }, () => createShipmentRoute(send("/api/staff/shipments", "POST", NEW_SHIPMENT))),
+    );
+
+    expect(responses.map((response) => response.status)).toEqual(Array(CREATES).fill(201));
+
+    const numbers = await Promise.all(
+      responses.map(async (response) => (await readJson<{ shipment: { trackingNumber: string } }>(response)).shipment.trackingNumber),
+    );
+    for (const number of numbers) {
+      expect(number).toMatch(GENERATED_TRACKING_NUMBER_PATTERN);
+    }
+    expect(new Set(numbers).size).toBe(CREATES);
+
+    // Exactly one row per request, and the database holds no duplicate.
+    const rows = await prisma.shipment.findMany({ select: { trackingNumber: true } });
+    expect(rows).toHaveLength(before + CREATES);
+    expect(new Set(rows.map((row) => row.trackingNumber)).size).toBe(rows.length);
   });
 
   it("refuses any event once a race has ended in delivery", async () => {

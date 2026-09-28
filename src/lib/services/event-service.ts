@@ -1,19 +1,25 @@
+import type { ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { splitHistoryAt, STATUS_LABEL, statusesAllowedBetween } from "@/lib/domain/status";
+import {
+  allowedNextStatuses,
+  journeyStep,
+  SHIPMENT_STATUSES,
+  STATUS_LABEL,
+} from "@/lib/domain/status";
 import { errors } from "@/lib/api/errors";
 import { toStaffEvent, type StaffEvent } from "@/lib/dto/event";
 import type { AuditChanges } from "@/lib/dto/shipment";
 import type { CreateEventInput } from "@/lib/validation/event";
 import { recordShipmentChange } from "./shipment-audit";
 import { lockShipment } from "./shipment-lock";
-import { assertCanMoveTo } from "./status-transition";
 
 /**
- * Tolerance for clock skew between an operator's browser and the server. A
- * tracking event asserts something that already happened, so anything beyond
- * this is rejected. A time within it is recorded as the present moment: kept
- * as sent, it would sort above every event recorded over the next few minutes,
- * and a delivery added in that window would be refused as not the latest.
+ * Tolerance for clock skew between an operator's browser and the database,
+ * whose clock is what "now" means for every event (see addEvent). A tracking
+ * event asserts something that already happened, so anything beyond this is
+ * rejected. A time within it is recorded as the present moment: kept as sent,
+ * it would sort above every event recorded over the next few minutes, and a
+ * delivery added in that window would be refused as not the latest.
  */
 export const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
@@ -45,6 +51,10 @@ export interface AddEventResult {
  * fills in history only and leaves the shipment as it is, so recording
  * something that happened earlier can never drag the present state backwards.
  *
+ * Every event, latest or back-dated, must leave the whole history a valid
+ * journey. A back-dated event is checked in place together with every event
+ * after it, because it can change the step those events carried on from.
+ *
  * A delivered event must be the latest update: delivery is the end of the
  * journey, and a timeline that continues after it would contradict itself.
  * This is also the only place a shipment becomes delivered, in the same
@@ -64,55 +74,77 @@ export async function addEvent(
   const result = await prisma.$transaction(async (tx) => {
     await lockShipment(tx, shipmentId);
 
-    // Read once the lock is held, so events recorded as happening now are
-    // dated in the order they are applied.
-    const occurredAt = eventTime(input.occurredAt, new Date());
+    // The present, by the database's clock, read once the lock is held. It
+    // dates an event recorded as happening now, limits how far ahead a given
+    // time may be, and breaks a tie on the time. Every instance of the
+    // application reads this one clock, so events recorded as happening now are
+    // dated in the order they are applied, however far the clock of the
+    // instance applying them has drifted. clock_timestamp() is the moment of
+    // the call; now() would be when the transaction began, before the wait for
+    // the lock.
+    const [{ now }] = await tx.$queryRaw<[{ now: Date }]>`SELECT clock_timestamp() AS now`;
+    const occurredAt = eventTime(input.occurredAt, now);
 
-    const latest = await tx.trackingEvent.findFirst({
-      where: { shipmentId },
-      orderBy: [{ occurredAt: "desc" }],
-      select: { occurredAt: true },
+    // The values the event may replace, read under the lock, so the checks and
+    // the audit trail both see exactly the state this event changes.
+    const before = await tx.shipment.findUniqueOrThrow({
+      where: { id: shipmentId },
+      select: { status: true, currentLocation: true },
     });
-    const becomesLatest = !latest || occurredAt.getTime() >= latest.occurredAt.getTime();
+
+    const history = await tx.trackingEvent.findMany({
+      where: { shipmentId },
+      orderBy: EVENT_ORDER_OLDEST_FIRST,
+      select: { type: true, occurredAt: true },
+    });
+
+    // The event sorts after every event dated at or before it, one with exactly
+    // the same time included, since it is recorded after them.
+    const position = history.filter((event) => event.occurredAt <= occurredAt).length;
+    const becomesLatest = position === history.length;
 
     if (input.type === "DELIVERED" && !becomesLatest) {
       throw errors.deliveredEventNotLatest();
     }
 
-    // Only an event that becomes the latest update moves the shipment, so only
-    // that one has to follow the journey. A back-dated event fills in history.
-    if (becomesLatest) {
-      const current = await tx.shipment.findUniqueOrThrow({
-        where: { id: shipmentId },
-        select: { status: true },
-      });
-      await assertCanMoveTo(tx, shipmentId, "type", current.status, input.type);
-    } else {
-      // A back-dated event has to fit where it is dated: after what came before
-      // it, and before what came after it, so the timeline stays in order.
-      const history = await tx.trackingEvent.findMany({
-        where: { shipmentId },
-        select: { type: true, occurredAt: true },
-      });
-      const { before, after } = splitHistoryAt(history, occurredAt);
+    if (position === 0 && history.length > 0) {
+      throw errors.eventOutOfOrder(
+        "occurredAt",
+        "An earlier event cannot be dated before the shipment's first event.",
+      );
+    }
 
-      if (before.length === 0) {
-        throw errors.eventOutOfOrder(
-          "occurredAt",
-          "An earlier event cannot be dated before the shipment's first event.",
-        );
-      }
+    // The history as it would stand with the event in place. Nothing is written
+    // unless all of it, from the event onwards, is a valid journey.
+    const types = history.map((event) => event.type);
+    const withEvent = (type: ShipmentStatus) => [
+      ...types.slice(0, position),
+      type,
+      ...types.slice(position),
+    ];
 
-      const allowed = statusesAllowedBetween(before, after);
-      if (!allowed.includes(input.type)) {
-        const there = allowed.map((status) => STATUS_LABEL[status]).join(", ");
-        throw errors.eventOutOfOrder(
+    if (firstInvalidStep(withEvent(input.type), position, before.status) !== -1) {
+      const fitting = SHIPMENT_STATUSES.filter(
+        (type) => firstInvalidStep(withEvent(type), position, before.status) === -1,
+      );
+      const labels = fitting.map((type) => STATUS_LABEL[type]);
+
+      if (becomesLatest) {
+        const previous = position === 0 ? before.status : types[position - 1]!;
+        throw errors.invalidStatusTransition(
           "type",
-          allowed.length === 0
-            ? `The history cannot take a "${STATUS_LABEL[input.type]}" event at that time.`
-            : `A "${STATUS_LABEL[input.type]}" event does not fit at that time. There it can be: ${there}.`,
+          STATUS_LABEL[previous],
+          STATUS_LABEL[input.type],
+          labels,
         );
       }
+
+      throw errors.eventOutOfOrder(
+        "type",
+        fitting.length === 0
+          ? `The history cannot take a "${STATUS_LABEL[input.type]}" event at that time.`
+          : `A "${STATUS_LABEL[input.type]}" event does not fit at that time. There it can be: ${labels.join(", ")}.`,
+      );
     }
 
     const event = await tx.trackingEvent.create({
@@ -123,18 +155,33 @@ export async function addEvent(
         type: input.type,
         message: input.message,
         createdById: staffUserId,
+        // The time read under the lock rather than the column's default, so an
+        // event with the same time as an earlier one sorts after it, where it
+        // was checked.
+        createdAt: now,
       },
       select: staffEventSelect,
     });
 
-    if (becomesLatest) {
-      // The values the event replaces, read in the same transaction, so the
-      // audit trail records exactly what this event changed.
-      const before = await tx.shipment.findUniqueOrThrow({
-        where: { id: shipmentId },
-        select: { status: true, currentLocation: true },
+    // A tie on the time is broken by when events were recorded. Confirm the
+    // stored order is the one checked above; if clocks disagree, refuse rather
+    // than keep a history nobody validated.
+    if (history.some((existing) => existing.occurredAt.getTime() === occurredAt.getTime())) {
+      const stored = await tx.trackingEvent.findMany({
+        where: { shipmentId },
+        orderBy: EVENT_ORDER_OLDEST_FIRST,
+        select: { id: true },
       });
 
+      if (stored[position]?.id !== event.id) {
+        throw errors.eventOutOfOrder(
+          "occurredAt",
+          "Another event has exactly this time. Choose a slightly different time.",
+        );
+      }
+    }
+
+    if (becomesLatest) {
       await tx.shipment.update({
         where: { id: shipmentId },
         data: { status: input.type, currentLocation: input.location },
@@ -171,10 +218,41 @@ export async function addEvent(
   };
 }
 
+/** EVENT_ORDER_BY reversed: the order in which a journey is read. */
+const EVENT_ORDER_OLDEST_FIRST = [
+  { occurredAt: "asc" as const },
+  { createdAt: "asc" as const },
+  { id: "asc" as const },
+];
+
+/**
+ * The index of the first step in `types` (oldest first), from `from` onwards,
+ * that the journey rules do not allow, or -1 when every one is allowed. Steps
+ * before `from` are not checked: an event inserted at `from` cannot change
+ * them. `start` is the status of a shipment that has no events yet.
+ */
+function firstInvalidStep(
+  types: readonly ShipmentStatus[],
+  from: number,
+  start: ShipmentStatus,
+): number {
+  for (let index = from; index < types.length; index += 1) {
+    const previous = index === 0 ? start : types[index - 1]!;
+    const step = journeyStep(types.slice(0, index).reverse());
+
+    if (!allowedNextStatuses(previous, step).includes(types[index]!)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
 /**
  * When an event happened: the time the operator gave, or now when they gave
- * none. A time slightly ahead of the server's clock is recorded as now, and one
- * further ahead is refused. See FUTURE_TOLERANCE_MS.
+ * none. `now` is the database's clock, read under the shipment's lock. A time
+ * slightly ahead of it is recorded as now, and one further ahead is refused.
+ * See FUTURE_TOLERANCE_MS.
  */
 function eventTime(requested: Date | undefined, now: Date): Date {
   if (!requested) return now;

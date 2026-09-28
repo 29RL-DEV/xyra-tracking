@@ -10,18 +10,19 @@ export type ErrorCode =
   | "VALIDATION_FAILED"
   | "SHIPMENT_NOT_FOUND"
   | "ENQUIRY_NOT_FOUND"
-  | "TRACKING_NUMBER_TAKEN"
   | "INVALID_STATUS"
   | "EVENT_IN_FUTURE"
   | "DELIVERED_EVENT_NOT_LATEST"
   | "INVALID_STATUS_TRANSITION"
   | "EVENT_OUT_OF_ORDER"
   | "IMMUTABLE_FIELD"
+  | "IDEMPOTENCY_KEY_REUSED"
   | "UNAUTHENTICATED"
   | "SESSION_EXPIRED"
   | "RATE_LIMITED"
   | "TOO_MANY_ATTEMPTS"
   | "UNSUPPORTED_MEDIA_TYPE"
+  | "CROSS_SITE_REQUEST"
   | "INTERNAL_ERROR";
 
 export interface FieldErrors {
@@ -60,14 +61,6 @@ export const errors = {
 
   enquiryNotFound: () =>
     new AppError("ENQUIRY_NOT_FOUND", 404, "That enquiry no longer exists."),
-
-  trackingNumberTaken: (trackingNumber: string) =>
-    new AppError(
-      "TRACKING_NUMBER_TAKEN",
-      409,
-      `Tracking number ${trackingNumber} is already in use. Tracking numbers must be unique.`,
-      { trackingNumber: "This tracking number is already in use." },
-    ),
 
   invalidStatus: () =>
     new AppError(
@@ -122,6 +115,18 @@ export const errors = {
   immutableField: (field: string, explanation: string) =>
     new AppError("IMMUTABLE_FIELD", 400, explanation, { [field]: explanation }),
 
+  /**
+   * An Idempotency-Key that already created a shipment, sent again with
+   * different details. Answering with that shipment would suggest the new
+   * details were saved, so nothing is created and the reuse is refused.
+   */
+  idempotencyKeyReused: () =>
+    new AppError(
+      "IDEMPOTENCY_KEY_REUSED",
+      422,
+      "This Idempotency-Key has already created a shipment with different details, so nothing new was created. Use a new key for a new shipment.",
+    ),
+
   unauthenticated: () =>
     new AppError("UNAUTHENTICATED", 401, "You need to sign in to do that."),
 
@@ -136,7 +141,7 @@ export const errors = {
     new AppError(
       "RATE_LIMITED",
       429,
-      "That is a lot of enquiries in a short time. Please wait a few minutes and try again.",
+      "That is a lot of enquiries in a short time. Please try again later.",
     ),
 
   lookupRateLimited: () =>
@@ -163,6 +168,13 @@ export const errors = {
       "UNSUPPORTED_MEDIA_TYPE",
       415,
       "Send the request body as JSON, with Content-Type: application/json.",
+    ),
+
+  crossSiteRequest: () =>
+    new AppError(
+      "CROSS_SITE_REQUEST",
+      403,
+      "This request has to come from the application itself.",
     ),
 
   internal: () =>

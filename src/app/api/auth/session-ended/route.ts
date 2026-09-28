@@ -6,8 +6,9 @@ import { clearSessionCookie } from "@/lib/auth/session";
 export const dynamic = "force-dynamic";
 
 /**
- * Where a staff page sends a session whose token is validly signed but whose
- * account no longer exists.
+ * Where a staff page sends a session whose token is validly signed but which
+ * has ended on the server: signed out, past its recorded expiry, issued before
+ * sessions were recorded, or belonging to an account that no longer exists.
  *
  * The cookie has to be cleared before the person reaches the sign-in page:
  * middleware checks only the signature, so it would send them straight back

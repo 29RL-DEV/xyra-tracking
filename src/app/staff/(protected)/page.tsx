@@ -319,7 +319,7 @@ function AttentionRow({ shipment }: { shipment: StaffShipmentListItem }) {
       <div className="min-w-0">
         <Link
           href={`/staff/shipments/${shipment.id}`}
-          className="font-mono text-[0.9375rem] font-semibold text-brand-800 hover:underline"
+          className="break-all font-mono text-[0.9375rem] font-semibold text-brand-800 hover:underline"
         >
           {shipment.trackingNumber}
         </Link>
@@ -348,7 +348,7 @@ function ActivityRow({ shipment }: { shipment: StaffShipmentListItem }) {
       <div className="flex items-center justify-between gap-3">
         <Link
           href={`/staff/shipments/${shipment.id}`}
-          className="font-mono text-sm font-semibold text-brand-800 hover:underline"
+          className="min-w-0 break-all font-mono text-sm font-semibold text-brand-800 hover:underline"
         >
           {shipment.trackingNumber}
         </Link>

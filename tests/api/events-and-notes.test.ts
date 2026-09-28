@@ -182,6 +182,24 @@ describe("tracking events", () => {
       }
     });
 
+    it("refuses an event time that does not exist, or is not written as ISO 8601", async () => {
+      for (const occurredAt of [
+        "2026-02-30T10:00:00.000Z",
+        "2026-09-27T24:00:00Z",
+        "2026-09-27T10:61:00Z",
+        "27/09/2026 10:00",
+        "2026-09-27",
+      ]) {
+        const response = await addEvent(
+          send(`/api/staff/shipments/${fixtures.inTransitId}/events`, "POST", { ...VALID_EVENT, occurredAt }),
+          params({ id: fixtures.inTransitId }),
+        );
+
+        expect(response.status, occurredAt).toBe(400);
+        expect((await readJson<ErrorBody>(response)).error.fields?.occurredAt).toBeDefined();
+      }
+    });
+
     it("returns 404 for a shipment that does not exist", async () => {
       const response = await addEvent(
         send("/api/staff/shipments/nope/events", "POST", VALID_EVENT),

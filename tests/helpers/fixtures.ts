@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { resetRateLimits } from "@/lib/api/rate-limit";
 import { hashPassword } from "@/lib/auth/password";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
+import { startSession } from "@/lib/services/auth-service";
 import { setTestCookie, clearTestCookies } from "../setup/test-env";
 
 export const TEST_STAFF = {
@@ -42,6 +43,9 @@ export async function resetDatabase(): Promise<void> {
   await prisma.trackingEvent.deleteMany();
   await prisma.shipment.deleteMany();
   await prisma.staffUser.deleteMany();
+  // Enquiry limits are counted in the database, so clearing them here keeps
+  // one case's submissions from counting against the next.
+  await prisma.rateLimitCounter.deleteMany();
   clearTestCookies();
   // The limiter is module state shared by every test in the run, so sign-in
   // throttling from one case can never bleed into the next.
@@ -193,15 +197,20 @@ async function createShipment(input: {
   return shipment.id;
 }
 
-/** Puts a valid staff session in the request cookie jar. */
-export async function signIn(staffId: string): Promise<void> {
+/**
+ * Puts a valid staff session in the request cookie jar, backed by a recorded
+ * session exactly as sign-in creates one, and returns its token.
+ */
+export async function signIn(staffId: string): Promise<string> {
   const token = await signSession({
     userId: staffId,
     email: TEST_STAFF.email,
     name: TEST_STAFF.name,
+    sessionId: await startSession(staffId),
   });
 
   setTestCookie(SESSION_COOKIE, token);
+  return token;
 }
 
 export function signOut(): void {

@@ -14,10 +14,6 @@ import {
   SHIPMENT_TYPE_LABEL,
   STATUS_LABEL,
 } from "@/lib/domain/status";
-import {
-  TRACKING_DIGITS_PATTERN,
-  TRACKING_NUMBER_PREFIX,
-} from "@/lib/domain/tracking-number";
 import { MAX_PACKAGE_COUNT } from "@/lib/validation/shipment";
 import { Alert } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
@@ -33,12 +29,6 @@ import { useToast } from "@/components/ui/toast";
  */
 
 const formSchema = z.object({
-  trackingNumber: z
-    .string()
-    .trim()
-    .refine((value) => value === "" || TRACKING_DIGITS_PATTERN.test(value), {
-      message: "Use digits only, up to 6",
-    }),
   originCity: z.string().trim().min(1, "Origin city is required"),
   originCountry: z.string().trim().min(1, "Origin country is required"),
   destinationCity: z.string().trim().min(1, "Destination city is required"),
@@ -61,7 +51,6 @@ const formSchema = z.object({
 type FormValues = z.input<typeof formSchema>;
 
 const FIELD_NAMES = [
-  "trackingNumber",
   "originCity",
   "originCountry",
   "destinationCity",
@@ -81,6 +70,19 @@ function isFieldName(value: string): value is FieldName {
   return (FIELD_NAMES as readonly string[]).includes(value);
 }
 
+/**
+ * crypto.randomUUID is only available on pages served securely. The fallback
+ * draws from the same secure source, so a page opened over plain HTTP on a
+ * local network still gets a key rather than failing to render.
+ */
+function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
   const router = useRouter();
   const toast = useToast();
@@ -88,6 +90,10 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
   // Stays true once the server has saved, so the button cannot be pressed again
   // while the next page loads, which would create a second shipment.
   const [saved, setSaved] = useState(false);
+  // One key for the life of this form, sent with every create. A double submit,
+  // or a retry after a response that never arrived, is then answered with the
+  // shipment already created instead of making a second one.
+  const [idempotencyKey] = useState(newIdempotencyKey);
 
   const editing = shipment !== undefined;
 
@@ -99,8 +105,6 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      // Only the digits typed for a new shipment; an existing number is shown, not edited.
-      trackingNumber: "",
       originCity: shipment?.origin.city ?? "",
       originCountry: shipment?.origin.country ?? "United Kingdom",
       destinationCity: shipment?.destination.city ?? "",
@@ -116,8 +120,6 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
       customerReference: shipment?.customerReference ?? "",
     },
   });
-
-  const trackingNumberField = register("trackingNumber");
 
   const onSubmit = handleSubmit(async (raw) => {
     setFormError(null);
@@ -154,14 +156,11 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
         router.push(`/staff/shipments/${shipment.id}`);
         router.refresh();
       } else {
-        if (values.trackingNumber) {
-          payload.trackingNumber = `${TRACKING_NUMBER_PREFIX}${values.trackingNumber}`;
-        }
-
         const response = await apiSend<{ shipment: StaffShipment }>(
           "/api/staff/shipments",
           "POST",
           payload,
+          { "Idempotency-Key": idempotencyKey },
         );
         setSaved(true);
         toast.success(`Shipment ${response.shipment.trackingNumber} created`);
@@ -170,6 +169,16 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
       }
     } catch (error) {
       if (error instanceof ApiError) {
+        // Only possible when an earlier submit from this form did create a
+        // shipment but its response was lost, and the details have changed
+        // since. The server's wording is for API clients; this is for people.
+        if (error.code === "IDEMPOTENCY_KEY_REUSED") {
+          setFormError(
+            "This form has already created a shipment with different details. Check the shipments list before creating another, or reload the page to start a new one.",
+          );
+          return;
+        }
+
         let handled = false;
 
         for (const [field, message] of Object.entries(error.fields ?? {})) {
@@ -212,35 +221,13 @@ export function ShipmentForm({ shipment }: { shipment?: StaffShipment }) {
             </p>
           </div>
         ) : (
-          <Field
-            label="Tracking number"
-            required={false}
-            hint={`Type the digits only, ${TRACKING_NUMBER_PREFIX} is added for you. Leave blank to use the next free number.`}
-            error={errors.trackingNumber?.message}
-            className="sm:col-span-2"
-          >
-            <div className="flex">
-              <span
-                aria-hidden="true"
-                className="inline-flex shrink-0 items-center whitespace-nowrap rounded-l-lg border border-r-0 border-edge bg-surface-sunken px-3 font-mono text-sm font-semibold text-ink-muted"
-              >
-                {TRACKING_NUMBER_PREFIX}
-              </span>
-              <Input
-                {...trackingNumberField}
-                onChange={(event) => {
-                  // Only digits can be typed, so the number always fits the format.
-                  event.target.value = event.target.value.replace(/\D/g, "").slice(0, 6);
-                  void trackingNumberField.onChange(event);
-                }}
-                inputMode="numeric"
-                placeholder="006"
-                className="rounded-l-none font-mono"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
-          </Field>
+          <div className="sm:col-span-2">
+            <p className="text-sm font-medium text-ink">Tracking number</p>
+            <p className="mt-1.5 text-sm text-ink-muted">
+              Generated when the shipment is created: a random number, so no one can find a
+              shipment by guessing from another.
+            </p>
+          </div>
         )}
 
         {/* Status is never edited here: it follows the tracking events. */}

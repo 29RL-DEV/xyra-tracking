@@ -13,19 +13,36 @@ export interface SessionPayload {
   name: string;
 }
 
+/**
+ * What a session token carries: who is signed in, and the recorded session (a
+ * staff_sessions row) the token belongs to.
+ */
+export interface SessionClaims extends SessionPayload {
+  sessionId: string;
+}
+
 export type SessionResult =
-  | { state: "valid"; session: SessionPayload }
+  | {
+      state: "valid";
+      session: SessionPayload;
+      /**
+       * The recorded session the token names, or null for a token issued
+       * before sessions were recorded. A valid signature cannot say whether
+       * that session has since ended; readStaffSession asks the database.
+       */
+      sessionId: string | null;
+    }
   | { state: "missing" }
   | { state: "expired" }
   | { state: "invalid" };
 
 export async function signSession(
-  payload: SessionPayload,
+  claims: SessionClaims,
   expiresInSeconds: number = SESSION_MAX_AGE_SECONDS,
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
-  return new SignJWT({ ...payload })
+  return new SignJWT({ ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt(now)
     .setExpirationTime(now + expiresInSeconds)
@@ -42,13 +59,17 @@ export async function verifySession(token: string): Promise<SessionResult> {
       algorithms: ["HS256"],
     });
 
-    const { userId, email, name } = payload as Partial<SessionPayload>;
+    const { userId, email, name, sessionId } = payload as Partial<SessionClaims>;
 
     if (typeof userId !== "string" || typeof email !== "string" || typeof name !== "string") {
       return { state: "invalid" };
     }
 
-    return { state: "valid", session: { userId, email, name } };
+    return {
+      state: "valid",
+      session: { userId, email, name },
+      sessionId: typeof sessionId === "string" ? sessionId : null,
+    };
   } catch (error) {
     const code = (error as { code?: string }).code;
     if (code === "ERR_JWT_EXPIRED") {

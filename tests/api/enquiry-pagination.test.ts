@@ -114,8 +114,8 @@ describe("enquiry queue paging", () => {
     expect(open.enquiries[0]?.status).toBe("OPEN");
   });
 
-  it("rejects a page that is not a positive whole number", async () => {
-    for (const value of ["0", "-1", "abc", "1.5"]) {
+  it("rejects a page that is not a whole number within the bound", async () => {
+    for (const value of ["0", "-1", "abc", "1.5", "1e20", "10001"]) {
       const response = await listEnquiries(get(`/api/staff/enquiries?page=${value}`));
       expect(response.status, `page=${value}`).toBe(400);
     }

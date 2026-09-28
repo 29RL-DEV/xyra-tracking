@@ -9,8 +9,8 @@ import {
 } from "./session";
 
 /**
- * Where a staff page sends a session whose account no longer exists, to have
- * its cookie cleared. See the route for why a page cannot do that itself.
+ * Where a staff page sends a session that has ended on the server, to have its
+ * cookie cleared. See the route for why a page cannot do that itself.
  */
 export const SESSION_ENDED_PATH = "/api/auth/session-ended";
 
@@ -19,10 +19,14 @@ export type StaffSessionResult = SessionResult | { state: "removed" };
 /**
  * The current session, checked against the database as well as its signature.
  *
- * A signature alone is not enough: the account the token names must still
- * exist. A session issued before the account was deleted, for example by a
- * re-seed, is reported as "removed" rather than valid. Every staff check, for
- * the API and for pages, goes through here, so the two cannot disagree.
+ * A signature alone is not enough: it stays valid until the token expires. The
+ * recorded session the token names must still be live — not signed out, not
+ * past its expiry — and belong to the account the token names. The row cannot
+ * outlive its account, so this one query also turns away a session whose
+ * account was deleted, for example by a re-seed. Anything else, including a
+ * token issued before sessions were recorded, is reported as "removed" rather
+ * than valid. Every staff check, for the API and for pages, goes through here,
+ * so the two cannot disagree.
  */
 export async function readStaffSession(): Promise<StaffSessionResult> {
   const result = await readSession();
@@ -31,12 +35,21 @@ export async function readStaffSession(): Promise<StaffSessionResult> {
     return result;
   }
 
-  const account = await prisma.staffUser.findUnique({
-    where: { id: result.session.userId },
+  if (!result.sessionId) {
+    return { state: "removed" };
+  }
+
+  const live = await prisma.staffSession.findUnique({
+    where: {
+      id: result.sessionId,
+      staffUserId: result.session.userId,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
     select: { id: true },
   });
 
-  return account ? result : { state: "removed" };
+  return live ? result : { state: "removed" };
 }
 
 /**
@@ -46,10 +59,10 @@ export async function readStaffSession(): Promise<StaffSessionResult> {
  * touching the database. One shared function means the check cannot drift
  * between endpoints, and a missing call is visible in review.
  *
- * A session whose account no longer exists would otherwise pass every check
- * and then fail inside a write with a foreign-key error. Instead the stale
- * cookie is cleared and the request is refused, so the browser returns the
- * person to sign-in.
+ * A session that was signed out, or whose account no longer exists, would
+ * otherwise pass every check, and the latter would then fail inside a write
+ * with a foreign-key error. Instead the stale cookie is cleared and the
+ * request is refused, so the browser returns the person to sign-in.
  *
  * Throws, so it composes with handleRoute's error boundary.
  */
@@ -76,10 +89,10 @@ export async function requireStaff(): Promise<SessionPayload> {
  *
  * Middleware already redirects an unauthenticated request before any staff
  * page renders, but it checks only the token's signature: it cannot reach the
- * database. This is where a session whose account has been deleted is turned
- * away. For the other cases it mirrors middleware's own redirect exactly (same
- * `next` and `reason=expired` convention), so the two are indistinguishable to
- * the person being redirected.
+ * database. This is where a session that was signed out, or whose account has
+ * been deleted, is turned away. For the other cases it mirrors middleware's
+ * own redirect exactly (same `next` and `reason=expired` convention), so the
+ * two are indistinguishable to the person being redirected.
  *
  * `pathname` is supplied by the caller: a page has no request object to read
  * it from the way middleware does. It is always one of this application's own

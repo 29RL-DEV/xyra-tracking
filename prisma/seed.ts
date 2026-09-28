@@ -536,6 +536,9 @@ async function clearDemoData() {
   // One transaction: a failure part-way through leaves the database as it was
   // rather than half-emptied.
   await prisma.$transaction([
+    // Rate-limit counters live in the database now, so a fresh demo also
+    // starts with fresh limits.
+    prisma.rateLimitCounter.deleteMany(),
     prisma.enquiry.deleteMany(),
     prisma.internalNote.deleteMany(),
     prisma.trackingEvent.deleteMany(),

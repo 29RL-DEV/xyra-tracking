@@ -5,7 +5,7 @@ import {
   TRACKING_LOOKUP_RATE_LIMIT,
   trackingLookupKey,
 } from "@/lib/api/rate-limit";
-import { clientIdentifier } from "@/lib/api/request";
+import { clientIdentifier, decodePathSegment } from "@/lib/api/request";
 import { handleRoute, jsonResponse } from "@/lib/api/respond";
 import { isValidTrackingNumber } from "@/lib/domain/tracking-number";
 import { getPublicShipment } from "@/lib/services/shipment-service";
@@ -38,9 +38,9 @@ export const GET = handleRoute(
     }
 
     const { trackingNumber } = await context.params;
-    const decoded = decodeURIComponent(trackingNumber);
+    const decoded = decodePathSegment(trackingNumber);
 
-    if (!isValidTrackingNumber(decoded)) {
+    if (decoded === null || !isValidTrackingNumber(decoded)) {
       throw errors.validation("That does not look like a tracking number.", {
         trackingNumber:
           "Use 6 to 40 characters: letters, digits and hyphens only.",

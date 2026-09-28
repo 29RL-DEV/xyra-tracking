@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireStaffPage } from "@/lib/auth/require-staff";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { startSession } from "@/lib/services/auth-service";
 import { clearTestCookies, getTestCookie, setTestCookie } from "../setup/test-env";
 
 /**
@@ -26,12 +27,17 @@ function redirectedTo(): string {
 
 const ACCOUNT_EMAIL = "page-guard@demo.test";
 
-/** A signed session for an account that exists in the database. */
+/** A signed, recorded session for an account that exists in the database. */
 async function signInAsNewAccount(): Promise<string> {
   const account = await prisma.staffUser.create({
     data: { email: ACCOUNT_EMAIL, name: "Page Guard", passwordHash: "x" },
   });
-  const token = await signSession({ userId: account.id, email: ACCOUNT_EMAIL, name: "Page Guard" });
+  const token = await signSession({
+    userId: account.id,
+    email: ACCOUNT_EMAIL,
+    name: "Page Guard",
+    sessionId: await startSession(account.id),
+  });
   setTestCookie(SESSION_COOKIE, token);
 
   return account.id;
@@ -83,7 +89,10 @@ describe("requireStaffPage", () => {
   });
 
   it("marks an expired session distinctly from a missing one, matching middleware", async () => {
-    const expired = await signSession({ userId: "x", email: "a@b.test", name: "A" }, -60);
+    const expired = await signSession(
+      { userId: "x", email: "a@b.test", name: "A", sessionId: "x" },
+      -60,
+    );
     setTestCookie(SESSION_COOKIE, expired);
 
     await expect(requireStaffPage("/staff")).rejects.toThrow();

@@ -9,7 +9,7 @@ import {
   TRACKING_LOOKUP_RATE_LIMIT,
   trackingLookupKey,
 } from "@/lib/api/rate-limit";
-import { clientIdentifierFromHeaders } from "@/lib/api/request";
+import { clientIdentifierFromHeaders, decodePathSegment } from "@/lib/api/request";
 import { isValidTrackingNumber, normaliseTrackingNumber } from "@/lib/domain/tracking-number";
 import type { PublicTrackingResult } from "@/lib/dto/shipment";
 import { getPublicShipment } from "@/lib/services/shipment-service";
@@ -24,7 +24,7 @@ interface PageProps {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { trackingNumber } = await params;
   return {
-    title: `Tracking ${normaliseTrackingNumber(decodeURIComponent(trackingNumber))}`,
+    title: `Tracking ${normaliseTrackingNumber(decodePathSegment(trackingNumber) ?? trackingNumber)}`,
     // One person's shipment is not something a search engine should list,
     // and the tracking number is in both the URL and the title.
     robots: { index: false, follow: false },
@@ -44,7 +44,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
  * "not found" state, so the customer can correct the number in place.
  */
 export default async function TrackPage({ params }: PageProps) {
-  const raw = normaliseTrackingNumber(decodeURIComponent((await params).trackingNumber));
+  // A segment that cannot be decoded is not a tracking number, so it becomes
+  // one that fails validation below and answers "not found".
+  const raw = normaliseTrackingNumber(decodePathSegment((await params).trackingNumber) ?? "");
 
   let result: PublicTrackingResult | undefined;
   let missing = false;

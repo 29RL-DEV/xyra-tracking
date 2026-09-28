@@ -201,6 +201,39 @@ describe("staff authentication", () => {
     expect(response.status).toBe(401);
   });
 
+  it("refuses a sign-out sent from another site, and keeps the session", async () => {
+    await login(
+      send("/api/auth/login", "POST", {
+        email: TEST_STAFF.email,
+        password: TEST_STAFF.password,
+      }),
+    );
+
+    const fromElsewhere: Record<string, string>[] = [
+      { "Sec-Fetch-Site": "cross-site" },
+      { "Sec-Fetch-Site": "same-site" },
+      { Origin: "https://elsewhere.example" },
+    ];
+
+    for (const headers of fromElsewhere) {
+      const response = await logout(send("/api/auth/logout", "POST", undefined, headers));
+
+      expect(response.status).toBe(403);
+      expect((await readJson<ErrorBody>(response)).error.code).toBe("CROSS_SITE_REQUEST");
+      expect(getTestCookie(SESSION_COOKIE)).toBeTruthy();
+    }
+
+    // The application's own sign-out button still works.
+    const own = await logout(
+      send("/api/auth/logout", "POST", undefined, {
+        "Sec-Fetch-Site": "same-origin",
+        Origin: "http://localhost:3000",
+      }),
+    );
+    expect(own.status).toBe(204);
+    expect(getTestCookie(SESSION_COOKIE)).toBeUndefined();
+  });
+
   it("clears the session on logout, and the old cookie stops working", async () => {
     await login(
       send("/api/auth/login", "POST", {

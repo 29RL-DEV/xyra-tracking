@@ -1,11 +1,12 @@
 /**
- * A small in-memory rate limiter for the unauthenticated entry points that
- * need one: tracking lookups, enquiry submission and sign-in.
+ * A small in-memory rate limiter for tracking lookups and sign-in.
  *
- * Deliberately not backed by a shared store: this is a demo application and a
- * Redis dependency would be more infrastructure than the task calls for. The
- * consequence is that the limit is per serverless instance rather than global,
- * which is recorded as a limitation in the README rather than overstated here.
+ * Deliberately not backed by a shared store: a Redis dependency would be more
+ * infrastructure than these two need. The consequence is that these limits are
+ * per serverless instance rather than global, which is recorded as a
+ * limitation in the README rather than overstated here. Enquiries, the only
+ * unauthenticated write, are limited in the database instead (see
+ * src/lib/services/shared-rate-limit.ts), so their limits hold across instances.
  */
 
 interface Bucket {
@@ -19,11 +20,6 @@ export interface RateLimitOptions {
   limit: number;
   windowMs: number;
 }
-
-export const ENQUIRY_RATE_LIMIT: RateLimitOptions = {
-  limit: 10,
-  windowMs: 10 * 60 * 1000,
-};
 
 /**
  * Public tracking lookups, through the API and the /track page alike.

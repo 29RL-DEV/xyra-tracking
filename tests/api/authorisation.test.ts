@@ -151,7 +151,7 @@ describe("staff API authorisation", () => {
 
   it("rejects a token signed with the wrong secret", async () => {
     // A token whose payload looks right but whose signature does not verify.
-    const valid = await signSession({ userId: "x", email: "a@b.test", name: "A" });
+    const valid = await signSession({ userId: "x", email: "a@b.test", name: "A", sessionId: "x" });
     const tampered = `${valid.slice(0, -4)}AAAA`;
     setTestCookie(SESSION_COOKIE, tampered);
 
@@ -161,7 +161,7 @@ describe("staff API authorisation", () => {
 
   it("reports an expired session distinctly from a missing one", async () => {
     const expired = await signSession(
-      { userId: "x", email: "a@b.test", name: "A" },
+      { userId: "x", email: "a@b.test", name: "A", sessionId: "x" },
       -60,
     );
     setTestCookie(SESSION_COOKIE, expired);

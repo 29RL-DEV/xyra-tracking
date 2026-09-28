@@ -1,13 +1,10 @@
+import { createHash } from "node:crypto";
 import { Prisma, type ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { errors } from "@/lib/api/errors";
 import { ATTENTION_STATUSES, NEEDS_ATTENTION_FILTER } from "@/lib/domain/status";
 import { EVENT_ORDER_BY } from "@/lib/domain/ordering";
-import {
-  nextTrackingNumber,
-  normaliseTrackingNumber,
-  TRACKING_NUMBER_PREFIX,
-} from "@/lib/domain/tracking-number";
+import { generateTrackingNumber, normaliseTrackingNumber } from "@/lib/domain/tracking-number";
 import {
   toPublicShipment,
   toStaffNote,
@@ -16,6 +13,7 @@ import {
   toStaffShipmentEnquiry,
   toStaffShipmentListItem,
   type PublicTrackingResult,
+  type StaffShipment,
   type StaffShipmentDetail,
   type StaffShipmentListItem,
 } from "@/lib/dto/shipment";
@@ -250,68 +248,198 @@ export async function getShipmentIdByTrackingNumber(
   return shipment?.id ?? null;
 }
 
-/** The number after the highest TRK-DEMO- number already issued. */
-async function allocateTrackingNumber(): Promise<string> {
-  const issued = await prisma.shipment.findMany({
-    where: { trackingNumber: { startsWith: TRACKING_NUMBER_PREFIX } },
-    select: { trackingNumber: true },
-  });
-
-  return nextTrackingNumber(issued.map((shipment) => shipment.trackingNumber));
-}
+/**
+ * Two random numbers colliding is vanishingly unlikely at 80 bits, but it is
+ * the unique constraint on the tracking number that rules a duplicate out. If
+ * it ever rejects one, a fresh number is drawn.
+ */
+const TRACKING_NUMBER_ATTEMPTS = 3;
 
 /**
  * `staffUserId` is who is creating it, recorded in the audit trail. It is
  * optional only so the service can be exercised on its own; every route
  * passes the signed-in staff member.
+ *
+ * The tracking number is always generated, never chosen: a number anyone could
+ * pick is a number anyone could guess.
  */
 export async function createShipment(input: CreateShipmentInput, staffUserId?: string) {
-  if (input.trackingNumber) {
-    // A supplied number that is already taken is an ordinary, expected outcome,
-    // so it is answered without attempting the insert. Letting the insert fail
-    // would log a database error for every such request and bury real failures.
-    // The unique constraint still decides the race between two requests.
-    const existing = await prisma.shipment.findUnique({
-      where: { trackingNumber: input.trackingNumber },
-      select: { id: true },
-    });
-
-    if (existing) {
-      throw errors.trackingNumberTaken(input.trackingNumber);
-    }
-
+  for (let attempt = 1; ; attempt += 1) {
     try {
-      return await insertShipment(input, input.trackingNumber, staffUserId);
+      return await insertShipment(input, generateTrackingNumber(), staffUserId);
     } catch (error) {
-      if (isUniqueViolation(error)) throw errors.trackingNumberTaken(input.trackingNumber);
-      throw error;
+      if (!isUniqueViolation(error) || attempt === TRACKING_NUMBER_ATTEMPTS) throw error;
     }
   }
+}
 
-  // Two shipments created at the same moment can be offered the same next
-  // number; the unique constraint rejects the second, which then takes the one
-  // after it.
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+/**
+ * How long an Idempotency-Key is remembered: far longer than any retry of the
+ * same request, by a person or by a client. After that the key is forgotten,
+ * and sent again it creates a new shipment.
+ */
+export const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
+
+export interface IdempotentCreateResult {
+  shipment: StaffShipment;
+  /** True when the key had already created this shipment and nothing new was written. */
+  replayed: boolean;
+}
+
+/**
+ * createShipment, made safe to retry. The first request with a key creates the
+ * shipment; a repeat of it, however many times it is sent, is answered with
+ * that same shipment instead of creating another.
+ *
+ * The key row and the shipment are written in one transaction, so neither can
+ * exist without the other. Requests sent together with the same key all reach
+ * the key's unique index: the first to get there inserts, and the others wait
+ * on it until the first commits, then fail and roll back, shipment included.
+ * Each then reads what the first stored. Only a request that passed validation
+ * gets this far, so a rejected request never uses up its key.
+ *
+ * Keys belong to the staff member who sent them. The stored request hash is
+ * what makes a repeat a repeat: the same key with different details is
+ * refused, because answering with the earlier shipment would tell the caller
+ * their new details had been saved.
+ */
+export async function createShipmentIdempotently(
+  input: CreateShipmentInput,
+  staffUserId: string,
+  key: string,
+): Promise<IdempotentCreateResult> {
+  const requestHash = hashCreateInput(input);
+
+  for (let attempt = 1; ; attempt += 1) {
     try {
-      return await insertShipment(input, await allocateTrackingNumber(), staffUserId);
+      const shipment = await prisma.$transaction(async (tx) => {
+        // Clearing expired keys whenever a key is stored keeps the table
+        // bounded without a scheduled job. It also frees this key if it has
+        // expired, so an expired key behaves exactly like a new one.
+        await tx.shipmentCreationKey.deleteMany({
+          where: { createdAt: { lt: new Date(Date.now() - IDEMPOTENCY_KEY_TTL_MS) } },
+        });
+
+        // The shipment goes first because the key row points at it. A second
+        // request with the same key therefore inserts a shipment of its own,
+        // but only ever inside this transaction: it waits at the key, and its
+        // shipment is rolled back with everything else.
+        const created = await insertShipment(input, generateTrackingNumber(), staffUserId, tx);
+
+        await tx.shipmentCreationKey.create({
+          data: { staffUserId, key, requestHash, shipmentId: created.id },
+          select: { id: true },
+        });
+
+        return created;
+      });
+
+      return { shipment, replayed: false };
     } catch (error) {
-      if (!isUniqueViolation(error)) throw error;
+      if (isUniqueViolationOn(error, CREATION_KEY_UNIQUE)) {
+        const stored = await prisma.shipmentCreationKey.findUnique({
+          where: { staffUserId_key: { staffUserId, key } },
+          select: { requestHash: true, shipment: { select: staffShipmentSelect } },
+        });
+
+        if (stored) {
+          if (stored.requestHash !== requestHash) throw errors.idempotencyKeyReused();
+          return { shipment: toStaffShipment(stored.shipment), replayed: true };
+        }
+
+        // The row went between the failure and the read: its shipment was
+        // deleted, or the key expired and was cleared. Either way the key is
+        // free again, so the create is simply tried again below.
+      } else if (!isUniqueViolationOn(error, TRACKING_NUMBER_UNIQUE)) {
+        throw error;
+      }
+
+      if (attempt === TRACKING_NUMBER_ATTEMPTS) throw error;
     }
   }
+}
 
-  throw errors.internal();
+/**
+ * A fingerprint of what a create asks for, to tell a repeat of a request from
+ * a different request sent under the same key. It is taken from the validated
+ * input, so details that validate to the same shipment count as the same
+ * request: a weight of "4.5" or 4.5, a service level left to its default or
+ * sent as that default, the fields in any order.
+ */
+function hashCreateInput(input: CreateShipmentInput): string {
+  return createHash("sha256").update(canonicalJson(input)).digest("hex");
+}
+
+/**
+ * JSON with every object's keys in sorted order, so equal values always give
+ * the same text. Dates arrive here already as ISO strings: JSON.stringify
+ * applies toJSON before the replacer sees a value.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_name, nested: unknown) => {
+    if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
+      return nested;
+    }
+
+    const record = nested as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(record).sort().map((name) => [name, record[name]]));
+  });
 }
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
+interface UniqueConstraint {
+  columns: string[];
+  index: string;
+}
+
+const TRACKING_NUMBER_UNIQUE: UniqueConstraint = {
+  columns: ["trackingNumber"],
+  index: "shipments_trackingNumber_key",
+};
+
+const CREATION_KEY_UNIQUE: UniqueConstraint = {
+  columns: ["staffUserId", "key"],
+  index: "shipment_creation_keys_staffUserId_key_key",
+};
+
+/**
+ * Whether a unique violation was on this particular constraint. A keyed create
+ * can break two — a colliding tracking number is retried, a used key is
+ * replayed — so which one failed decides what happens next. Prisma names it in
+ * meta.target, usually as the columns and occasionally as the index name, so
+ * both forms are recognised.
+ */
+function isUniqueViolationOn(error: unknown, constraint: UniqueConstraint): boolean {
+  if (!isUniqueViolation(error)) return false;
+
+  const target = (error as Prisma.PrismaClientKnownRequestError).meta?.target;
+
+  if (typeof target === "string") {
+    return target === constraint.index;
+  }
+
+  if (!Array.isArray(target)) return false;
+
+  const columns = target.map((column) => String(column).replace(/"/g, "")).sort();
+  return columns.join(",") === [...constraint.columns].sort().join(",");
+}
+
 async function insertShipment(
   input: CreateShipmentInput,
   trackingNumber: string,
   staffUserId?: string,
+  /** The transaction to write in, when the insert is part of a larger one. */
+  db: Prisma.TransactionClient = prisma,
 ) {
-  const created = await prisma.shipment.create({
+  // The opening event is dated by the database's clock, the same one that
+  // dates events recorded as happening now, so an event added a moment later
+  // on an instance whose clock differs can never sort before it.
+  const [{ now }] = await db.$queryRaw<[{ now: Date }]>`SELECT clock_timestamp() AS now`;
+
+  const created = await db.shipment.create({
     data: {
       trackingNumber,
       status: input.status,
@@ -340,7 +468,7 @@ async function insertShipment(
       // customer sees, in the same statement as the shipment itself.
       events: {
         create: {
-          occurredAt: new Date(),
+          occurredAt: now,
           location: input.currentLocation ?? input.originCity,
           type: "CREATED",
           message: "Shipment details received. Awaiting collection.",

@@ -33,7 +33,7 @@ The seed also adds about twenty more shipments (TRK-DEMO-006 onwards) so search,
 **Staff (login)**
 - Overview page with counts and the shipments that need attention.
 - Shipment list with search, status filter and pagination.
-- Create and edit shipments. The tracking number is always TRK-DEMO- plus digits: staff type only the digits, or leave it blank to get the next free number.
+- Create and edit shipments. Each new shipment gets a random tracking number (TRK- plus 16 characters, 80 bits from a secure random source), so no number can be worked out from another.
 - Add tracking events. History is append-only, nothing is edited or deleted.
 - Internal notes the customer never sees.
 - A change history on each shipment showing who changed what.
@@ -63,15 +63,16 @@ One thing I paid particular attention to is keeping public and staff data separa
 
 - Status changes only through tracking events. The newest event sets the shipment's status and location; there is no separate status control, and the API rejects a status sent with a shipment edit.
 - Shipments move through the defined lifecycle: Created → Collected → In transit → Out for delivery → Delivered. Events can also record Delayed or Exception states without skipping the normal lifecycle.
-- Earlier-dated events can be added to history but cannot move the shipment backwards. Invalid transitions are rejected by the server with 422.
+- Earlier-dated events can be added to history but cannot move the shipment backwards. The whole history is checked with the new event in place, not just its neighbours, so a back-dated event can't leave a later one out of sequence either. Invalid transitions are rejected by the server with 422.
 - Delivered is final, and a shipment cannot be marked Delivered without a matching latest Delivered event.
 - Customer messages are optional for normal events and required for Delayed and Exception events. Future-dated events are rejected. A time up to five minutes ahead is treated as clock skew and recorded as now, so it can't hold up the next event.
 - Every write to a shipment locks its row first, so two events sent at the same moment are checked one after the other and can't both get past the rules.
+- Creating a shipment accepts an `Idempotency-Key` header: a retry with the same key returns the shipment already created instead of making a second one. The staff form sends one automatically.
 - The original ETA is preserved when it changes, and tracking numbers cannot be changed after creation.
 
 ## Security
 
-- Passwords are hashed with bcrypt. The session is a signed token in an `httpOnly` cookie that expires after 8 hours. If the staff account behind a session is deleted, the API and the staff pages both refuse it.
+- Passwords are hashed with bcrypt. The session is a signed token in an `httpOnly` cookie that expires after 8 hours, and each sign-in is also recorded in the database. Signing out ends that session on the server, so a copied token stops working, while other people signed in to the same account stay signed in. If the staff account behind a session is deleted, the API and the staff pages both refuse it.
 - Sign-in, tracking lookups and enquiries are rate limited.
 - Zod validates every endpoint on the server. Endpoints that take a body only accept `Content-Type: application/json`. Prisma queries are parameterised.
 - Security headers are set, including a Content Security Policy.
@@ -118,17 +119,16 @@ GitHub Actions runs lint, typecheck, the Vitest tests, a production build and th
 
 Vercel runs the app and Supabase hosts the database. Set `DATABASE_URL` and `SESSION_SECRET` as environment variables in Vercel.
 
-Migrations and seeding are run separately from your machine, not on deploy. The seed deletes every row first, so on a non-local database it only runs when `ALLOW_DESTRUCTIVE_SEED=yes` is set explicitly.
+Migrations and seeding are run separately from your machine, not on deploy. Apply migrations before deploying a version that uses them, since the app doesn't migrate on start. The seed deletes every row first, so on a non-local database it only runs when `ALLOW_DESTRUCTIVE_SEED=yes` is set explicitly.
 
 ## Known limitations
 
-- The rate limiter is in memory. On a serverless host each instance keeps its own counters, so it stops casual abuse but isn't a real global limit.
-- Sessions can't be revoked before they expire. Signing out only clears the cookie.
+- The limits on tracking lookups and sign-in are kept in memory. On a serverless host each instance keeps its own counters, so they stop casual abuse but aren't a real global limit. Enquiries, the only public write, are limited in PostgreSQL instead: per address, per tracking number and overall, shared by every instance.
 - Staff accounts are only created by the seed (two, with the same single role). There's no registration or password change.
 - Staff can't reply to an enquiry from the app. It collects no contact details, as the brief asks, so there is nowhere to send an answer. Staff mark an enquiry resolved or reopen it, and leave an internal note on the shipment.
 - Only enquiries can be deleted. Shipments, events and notes can't.
 - Weight and package count are only capped at what the database columns hold, and the estimated delivery date isn't checked against today, since an overdue shipment keeps its date. The brief sets no business limits for these, so I didn't make any up.
 - Current location can be edited directly, even after delivery, because the brief lists it as an editable detail. A later tracking event, if there is one, replaces it.
-- Tracking numbers follow on from each other, so someone could guess a neighbouring one. Lookups are rate limited and the public page shows no personal data, but a real carrier would use random numbers.
+- The demo shipments keep their sequential TRK-DEMO- numbers so the links in this README keep working, which means those can be guessed. Every shipment created in the app gets a random number.
 
-With more time I'd add a shared rate limiter, server-side session revocation, an automated accessibility check, and a way for staff to answer an enquiry, for example a reply shown on the tracking page next to the customer's reference.
+With more time I'd move the lookup and sign-in limits to the database too, add an automated accessibility check, and build a way for staff to answer an enquiry, for example a reply shown on the tracking page next to the customer's reference.

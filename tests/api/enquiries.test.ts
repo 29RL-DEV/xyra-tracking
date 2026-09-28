@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { POST as submitEnquiry } from "@/app/api/enquiries/route";
 import { GET as listEnquiries } from "@/app/api/staff/enquiries/route";
-import { PATCH as patchEnquiry } from "@/app/api/staff/enquiries/[id]/route";
-import { resetRateLimits } from "@/lib/api/rate-limit";
+import { DELETE as deleteEnquiry, PATCH as patchEnquiry } from "@/app/api/staff/enquiries/[id]/route";
 import { prisma } from "@/lib/db";
 import type { StaffEnquiry } from "@/lib/dto/enquiry";
 import { get, params, readJson, send, type ErrorBody } from "../helpers/request";
@@ -24,9 +23,10 @@ describe("customer enquiries", () => {
   let fixtures: Fixtures;
 
   beforeEach(async () => {
+    // Also clears the shared enquiry rate-limit counters, which live in the
+    // database rather than in the in-memory limiter.
     await resetDatabase();
     fixtures = await seedFixtures();
-    resetRateLimits();
     signOut();
   });
 
@@ -189,33 +189,7 @@ describe("customer enquiries", () => {
       ).toBe(2);
     });
 
-    it("rate limits a client that submits too many enquiries", async () => {
-      const request = () =>
-        submitEnquiry(
-          new Request("http://localhost/api/enquiries", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-forwarded-for": "203.0.113.7",
-            },
-            body: JSON.stringify({
-              ...VALID_ENQUIRY,
-              message: `Unique message ${Math.random()} for the rate limit test.`,
-            }),
-          }) as never,
-        );
-
-      for (let i = 0; i < 10; i += 1) {
-        const response = await request();
-        expect(response.status).toBe(201);
-      }
-
-      const limited = await request();
-      expect(limited.status).toBe(429);
-
-      const body = await readJson<ErrorBody>(limited);
-      expect(body.error.code).toBe("RATE_LIMITED");
-    });
+    // Rate limiting is covered in enquiry-rate-limit.test.ts.
   });
 
   describe("staff management", () => {
@@ -309,6 +283,31 @@ describe("customer enquiries", () => {
       );
 
       expect(response.status).toBe(404);
+    });
+
+    it("answers 404, never 500, when an enquiry is deleted while it is being resolved", async () => {
+      for (let round = 0; round < 10; round += 1) {
+        const enquiry = await prisma.enquiry.create({
+          data: {
+            shipmentId: fixtures.inTransitId,
+            trackingNumber: "TRK-TEST-001",
+            category: "OTHER",
+            message: `Please call before delivery, round ${round}.`,
+          },
+        });
+
+        const [resolve, remove] = await Promise.all([
+          patchEnquiry(
+            send(`/api/staff/enquiries/${enquiry.id}`, "PATCH", { status: "RESOLVED" }),
+            params({ id: enquiry.id }),
+          ),
+          deleteEnquiry(send(`/api/staff/enquiries/${enquiry.id}`, "DELETE"), params({ id: enquiry.id })),
+        ]);
+
+        expect(remove.status).toBe(204);
+        expect([200, 404]).toContain(resolve.status);
+        expect(await prisma.enquiry.findUnique({ where: { id: enquiry.id } })).toBeNull();
+      }
     });
 
     it("rejects an invalid enquiry status", async () => {

@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as list, POST as create } from "@/app/api/staff/shipments/route";
 import { GET as detail, PATCH as update } from "@/app/api/staff/shipments/[id]/route";
 import { GET as publicTrack } from "@/app/api/shipments/[trackingNumber]/route";
 import { prisma } from "@/lib/db";
+import { GENERATED_TRACKING_NUMBER_PATTERN } from "@/lib/domain/tracking-number";
 import type { StaffShipment, StaffShipmentDetail } from "@/lib/dto/shipment";
 import type { PublicTrackingResult } from "@/lib/dto/shipment";
 import { get, params, readJson, send, type ErrorBody } from "../helpers/request";
@@ -113,6 +114,18 @@ describe("staff shipments API", () => {
       expect((await readJson<{ total: number }>(exact)).total).toBe(1);
     });
 
+    it("answers a page far past any list with 400, not a failed query", async () => {
+      for (const page of ["1e20", "99999999999999999999", "10001"]) {
+        const response = await list(get(`/api/staff/shipments?page=${page}`));
+        expect(response.status, page).toBe(400);
+        expect((await readJson<ErrorBody>(response)).error.fields?.page).toBeDefined();
+      }
+
+      const last = await list(get("/api/staff/shipments?page=10000"));
+      expect(last.status).toBe(200);
+      expect((await readJson<{ shipments: unknown[] }>(last)).shipments).toEqual([]);
+    });
+
     it("returns an empty list rather than an error when nothing matches", async () => {
       const response = await list(get("/api/staff/shipments?q=NOTHINGMATCHES"));
 
@@ -139,45 +152,77 @@ describe("staff shipments API", () => {
   });
 
   describe("creating a shipment", () => {
-    it("creates a shipment and generates a unique tracking number", async () => {
+    it("creates a shipment with a generated random tracking number", async () => {
       const response = await create(send("/api/staff/shipments", "POST", VALID_SHIPMENT));
       expect(response.status).toBe(201);
 
       const body = await readJson<{ shipment: StaffShipment }>(response);
-      // No fixture uses the TRK-DEMO- sequence, so the first number is issued.
-      expect(body.shipment.trackingNumber).toBe("TRK-DEMO-001");
+      expect(body.shipment.trackingNumber).toMatch(GENERATED_TRACKING_NUMBER_PATTERN);
       expect(await prisma.shipment.count()).toBe(6);
     });
 
-    it("accepts a supplied tracking number, upper-cases and pads it", async () => {
-      const response = await create(
-        send("/api/staff/shipments", "POST", {
-          ...VALID_SHIPMENT,
-          trackingNumber: "trk-demo-7",
-        }),
-      );
+    it("refuses a tracking number chosen by the caller, so every new number is generated", async () => {
+      for (const trackingNumber of ["TRK-DEMO-050", "TRK-7KQ9M4ZT8P2X6N5D", ""]) {
+        const response = await create(
+          send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, trackingNumber }),
+        );
 
-      const body = await readJson<{ shipment: StaffShipment }>(response);
-      expect(body.shipment.trackingNumber).toBe("TRK-DEMO-007");
+        expect(response.status).toBe(400);
+        expect((await readJson<ErrorBody>(response)).error.fields?.trackingNumber).toBeDefined();
+      }
+      expect(await prisma.shipment.count()).toBe(5);
     });
 
-    it("rejects a duplicate tracking number with 409 and creates nothing", async () => {
-      await create(
-        send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, trackingNumber: "TRK-DEMO-050" }),
-      );
-      const before = await prisma.shipment.count();
+    it("draws a fresh number when a generated one is already taken", async () => {
+      // All-zero random bytes give TRK-0000000000000000; a shipment already has it.
+      await prisma.shipment.create({
+        data: {
+          trackingNumber: "TRK-0000000000000000",
+          originCity: "Pelforth",
+          originCountry: "United Kingdom",
+          destinationCity: "Redhaven",
+          destinationCountry: "United Kingdom",
+          estimatedDelivery: new Date("2026-12-01T00:00:00.000Z"),
+        },
+      });
+      const random = vi
+        .spyOn(globalThis.crypto, "getRandomValues")
+        .mockImplementationOnce((array) => array);
 
-      const response = await create(
-        send("/api/staff/shipments", "POST", {
-          ...VALID_SHIPMENT,
-          trackingNumber: "TRK-DEMO-050",
-        }),
-      );
+      try {
+        const response = await create(send("/api/staff/shipments", "POST", VALID_SHIPMENT));
 
-      expect(response.status).toBe(409);
-      const body = await readJson<ErrorBody>(response);
-      expect(body.error.code).toBe("TRACKING_NUMBER_TAKEN");
-      expect(await prisma.shipment.count()).toBe(before);
+        expect(response.status).toBe(201);
+        const { shipment } = await readJson<{ shipment: StaffShipment }>(response);
+        expect(shipment.trackingNumber).toMatch(GENERATED_TRACKING_NUMBER_PATTERN);
+        expect(shipment.trackingNumber).not.toBe("TRK-0000000000000000");
+        expect(await prisma.shipment.count()).toBe(7);
+      } finally {
+        random.mockRestore();
+      }
+    });
+
+    it("gives no way from one new number to another", async () => {
+      const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+      const numbers: string[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const response = await create(send("/api/staff/shipments", "POST", VALID_SHIPMENT));
+        numbers.push((await readJson<{ shipment: StaffShipment }>(response)).shipment.trackingNumber);
+      }
+
+      // The numbers either side of each one, as a sequence would place them,
+      // lead nowhere.
+      for (const number of numbers) {
+        const last = alphabet.indexOf(number[number.length - 1]!);
+        for (const step of [-1, 1]) {
+          const neighbour = number.slice(0, -1) + alphabet[(last + step + 32) % 32];
+          const response = await publicTrack(
+            get(`/api/shipments/${neighbour}`),
+            params({ trackingNumber: neighbour }),
+          );
+          expect(response.status, neighbour).toBe(404);
+        }
+      }
     });
 
     it("rejects missing required fields with per-field messages", async () => {
@@ -211,6 +256,42 @@ describe("staff shipments API", () => {
       );
 
       expect(response.status).toBe(400);
+    });
+
+    it("refuses a date that does not exist rather than moving it to another day", async () => {
+      for (const estimatedDelivery of ["2026-02-30", "2026-02-29", "2026-04-31", "2026-13-01", "0000-01-01"]) {
+        const response = await create(
+          send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, estimatedDelivery }),
+        );
+
+        expect(response.status, estimatedDelivery).toBe(400);
+        expect((await readJson<ErrorBody>(response)).error.fields?.estimatedDelivery).toBeDefined();
+      }
+      expect(await prisma.shipment.count()).toBe(5);
+
+      // A leap day is a real date.
+      const leapDay = await create(
+        send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, estimatedDelivery: "2028-02-29" }),
+      );
+      expect(leapDay.status).toBe(201);
+      expect((await readJson<{ shipment: StaffShipment }>(leapDay)).shipment.estimatedDelivery).toBe(
+        "2028-02-29",
+      );
+    });
+
+    it("keeps a weight to the two decimal places the database stores, never rounding it to zero", async () => {
+      for (const weightKg of [0.001, 0.004, 1.234, "12.345"]) {
+        const response = await create(send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, weightKg }));
+
+        expect(response.status, String(weightKg)).toBe(400);
+        expect((await readJson<ErrorBody>(response)).error.fields?.weightKg).toBeDefined();
+      }
+
+      for (const weightKg of [0.01, 4.35, "12.5"]) {
+        const response = await create(send("/api/staff/shipments", "POST", { ...VALID_SHIPMENT, weightKg }));
+        expect(response.status, String(weightKg)).toBe(201);
+        expect((await readJson<{ shipment: StaffShipment }>(response)).shipment.weightKg).toBe(Number(weightKg));
+      }
     });
 
     it("answers a weight or package count too large for the database with a 400, not a failed insert", async () => {
@@ -253,10 +334,14 @@ describe("staff shipments API", () => {
       );
 
       expect(publicResponse.status).toBe(200);
-      const body = await readJson<PublicTrackingResult>(publicResponse);
+      const raw = await publicResponse.text();
+      const body = JSON.parse(raw) as PublicTrackingResult;
       // Creation is the first event the customer sees.
       expect(body.events).toHaveLength(1);
       expect(body.events[0]).toMatchObject({ type: "CREATED", location: VALID_SHIPMENT.originCity });
+      // The public handle is the tracking number; the internal id stays inside.
+      expect(body.shipment).not.toHaveProperty("id");
+      expect(raw).not.toContain(created.shipment.id);
     });
   });
 

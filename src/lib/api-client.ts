@@ -94,10 +94,16 @@ export async function apiSend<T>(
   path: string,
   method: "POST" | "PATCH" | "PUT" | "DELETE",
   body?: unknown,
+  /**
+   * Extra request headers, such as the Idempotency-Key a create sends. The
+   * JSON headers are set after them, so they cannot be overridden by accident.
+   */
+  headers?: Record<string, string>,
 ): Promise<T> {
   const response = await fetch(path, {
     method,
     headers: {
+      ...headers,
       Accept: "application/json",
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },

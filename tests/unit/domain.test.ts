@@ -1,11 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   latestEvent,
   orderEventsNewestFirst,
 } from "@/lib/domain/ordering";
 import {
+  generateTrackingNumber,
+  GENERATED_TRACKING_NUMBER_PATTERN,
   isValidTrackingNumber,
-  nextTrackingNumber,
   normaliseTrackingNumber,
 } from "@/lib/domain/tracking-number";
 import {
@@ -78,16 +79,50 @@ describe("tracking numbers", () => {
     expect(normaliseTrackingNumber("  trk-demo-001 ")).toBe("TRK-DEMO-001");
   });
 
-  it("gives a new shipment the number after the highest one issued", () => {
-    expect(nextTrackingNumber([])).toBe("TRK-DEMO-001");
-    expect(nextTrackingNumber(["TRK-DEMO-001", "TRK-DEMO-022", "TRK-DEMO-008"])).toBe(
-      "TRK-DEMO-023",
-    );
-    // Numbers in another format do not affect the sequence.
-    expect(nextTrackingNumber(["TRK-DEMO-005", "TRK-4KP2M9", "TRK-TEST-900"])).toBe(
-      "TRK-DEMO-006",
-    );
-    expect(isValidTrackingNumber(nextTrackingNumber(["TRK-DEMO-999"]))).toBe(true);
+  it("issues new numbers in one format that lookup accepts", () => {
+    for (let i = 0; i < 1_000; i += 1) {
+      const number = generateTrackingNumber();
+
+      expect(number).toMatch(GENERATED_TRACKING_NUMBER_PATTERN);
+      expect(isValidTrackingNumber(number)).toBe(true);
+    }
+  });
+
+  it("issues numbers that never repeat and follow no sequence", () => {
+    const numbers = Array.from({ length: 20_000 }, generateTrackingNumber);
+
+    expect(new Set(numbers).size).toBe(numbers.length);
+
+    // Every one of the 16 random positions varies across the whole alphabet,
+    // rather than some of them staying fixed or counting up.
+    for (let position = 4; position < 20; position += 1) {
+      expect(new Set(numbers.map((number) => number[position])).size).toBe(32);
+    }
+
+    // One number says nothing about the next: consecutive numbers agree in
+    // about one position in 32, where a sequence would agree in nearly all.
+    let shared = 0;
+    for (let i = 1; i < numbers.length; i += 1) {
+      for (let position = 4; position < 20; position += 1) {
+        if (numbers[i]![position] === numbers[i - 1]![position]) shared += 1;
+      }
+    }
+    expect(shared / (numbers.length - 1)).toBeLessThan(1);
+  });
+
+  it("draws every number from the cryptographically secure random source", () => {
+    const secure = vi.spyOn(globalThis.crypto, "getRandomValues");
+    const insecure = vi.spyOn(Math, "random");
+
+    try {
+      generateTrackingNumber();
+
+      expect(secure).toHaveBeenCalledOnce();
+      expect(insecure).not.toHaveBeenCalled();
+    } finally {
+      secure.mockRestore();
+      insecure.mockRestore();
+    }
   });
 });
 

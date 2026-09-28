@@ -1,4 +1,4 @@
-import type { EnquiryStatus } from "@prisma/client";
+import { Prisma, type EnquiryStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { errors } from "@/lib/api/errors";
 import { normaliseTrackingNumber } from "@/lib/domain/tracking-number";
@@ -160,25 +160,25 @@ export async function setEnquiryStatus(
   status: EnquiryStatus,
   staffUserId: string,
 ): Promise<StaffEnquiry> {
-  const existing = await prisma.enquiry.findUnique({
-    where: { id },
-    select: { id: true },
-  });
+  try {
+    const updated = await prisma.enquiry.update({
+      where: { id },
+      data:
+        status === "RESOLVED"
+          ? { status, resolvedAt: new Date(), resolvedById: staffUserId }
+          : { status, resolvedAt: null, resolvedById: null },
+      select: staffEnquirySelect,
+    });
 
-  if (!existing) {
-    throw errors.enquiryNotFound();
+    return toStaffEnquiry(updated);
+  } catch (error) {
+    // Missing from the start, or deleted by someone else a moment ago: either
+    // way there is nothing to update, and the answer is the same.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      throw errors.enquiryNotFound();
+    }
+    throw error;
   }
-
-  const updated = await prisma.enquiry.update({
-    where: { id },
-    data:
-      status === "RESOLVED"
-        ? { status, resolvedAt: new Date(), resolvedById: staffUserId }
-        : { status, resolvedAt: null, resolvedById: null },
-    select: staffEnquirySelect,
-  });
-
-  return toStaffEnquiry(updated);
 }
 
 /**

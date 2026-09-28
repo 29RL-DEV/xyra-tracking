@@ -93,9 +93,9 @@ test.describe("staff operations", () => {
 
     await page.getByRole("button", { name: /Create shipment/i }).click();
 
-    // Lands on the new shipment's detail page with a generated number.
+    // Lands on the new shipment's detail page with a generated random number.
     const heading = page.locator("h1").first();
-    await expect(heading).toContainText(/^TRK-/);
+    await expect(heading).toHaveText(/^TRK-[0-9A-HJKMNP-TV-Z]{16}$/);
 
     const trackingNumber = (await heading.innerText()).trim();
 
